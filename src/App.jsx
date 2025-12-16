@@ -1,39 +1,85 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  Utensils,
-  Coffee,
-  Archive,
-  ChevronLeft,
-  Trash2,
-  ArrowLeft,
-  Plus,
-  Search,
-  XCircle
+  Utensils, Coffee, Archive, ChevronLeft, Trash2, ArrowLeft, Plus, Search, XCircle
 } from 'lucide-react';
 
 import { db } from './firebase';
 import {
-  collection,
-  onSnapshot,
-  addDoc,
-  updateDoc,
-  doc,
-  query,
-  orderBy,
-  serverTimestamp,
-  runTransaction,
-  getDocs,
-  writeBatch,
-  deleteDoc,
+  collection, onSnapshot, addDoc, updateDoc, doc, query, orderBy,
+  serverTimestamp, runTransaction, getDocs, writeBatch, deleteDoc
 } from 'firebase/firestore';
 
-import './App.css'; // Asegúrate de importar el CSS
+import './App.css'; 
 
-// CONFIG
-const LOGO_URL = ''; // Pega tu URL si tienes
+// CONFIGURACIÓN
+const LOGO_URL = ''; // Pega tu URL aquí si tienes
+// Nota: Se agrego la línea 64 para Michelado en Refrescos
 const INITIAL_CSV_DATA = `id;nombre;categoria;precio
 1;Ensalada César con pollo;Ensaladas;5000
-99;Producto Especial (Tablas);Especial;0`; // (Resumido para ahorrar espacio, el original funciona igual)
+2;Ensalada con camarones;Ensaladas;5500
+3;Arroz con camarones;Platos Principales;6000
+4;Pollo a la parrilla;Platos Principales;6000
+5;Quesadilla de pollo;Platos Principales;5500
+6;Quesadilla de camarón;Platos Principales;5500
+7;Dedos de pollo;Platos Principales;5000
+8;Dedos de pescado;Platos Principales;5000
+9;Costilla de cerdo BBQ;Platos Principales;7500
+10;Corte de res Premium;Platos Principales;9500
+11;Sirloin (papas y veg);Para Compartir;20000
+12;Parrillada mixta para 4;Para Compartir;40000
+13;Postre del día;Postres;2500
+14;Mojito;Cócteles;3000
+15;Aperol Spritz;Cócteles;3000
+16;Malibú/Naranja;Cócteles;3000
+17;Mojito Blu Curacao;Cócteles;4000
+18;Malibú (Solo);Cócteles;4000
+19;Cantaritos;Cócteles;3000
+20;Margarita;Cócteles;3000
+21;Bon Amí;Cócteles;3500
+22;Flor de Caña 7 años;Licores;2500
+23;Flor de Caña 12 años;Licores;4000
+24;Ron Appleton;Licores;3000
+25;Ron Centenario 12 años;Licores;4000
+26;Tequila Campo Azul;Licores;3000
+27;Tequila Don Julio;Licores;4000
+28;Tequila 1800;Licores;4000
+29;Whiskey Old Par;Licores;3000
+30;Whiskey Jhonny W Black;Licores;3000
+31;Whiskey Chivas 12 años;Licores;4000
+32;Whiskey Buccanans;Licores;3500
+33;Whiskey Jameson;Licores;3000
+34;Cacique;Licores;1500
+35;Campari;Licores;2000
+36;Aguardiente;Licores;2000
+37;Jagermeister;Licores;3000
+38;Baileys;Licores;2500
+39;Chiligüaro;Licores;1000
+40;Imperial (Light/Silver/Ultra);Cervezas;1500
+41;Pilsen 6.0;Cervezas;1500
+42;Bavaria (Gold/Light);Cervezas;2000
+43;Heineken / Sol / Smirnoff;Cervezas;2000
+44;Michelado (Suplemento);Cervezas;300
+45;Copa Vino Tinto;Vinos;3000
+46;Copa Vino Blanco;Vinos;3000
+47;Sangría;Vinos;2500
+48;Limonada (Agua);Bebidas Naturales;1500
+49;Tamarindo (Agua);Bebidas Naturales;1500
+50;Mango (Agua);Bebidas Naturales;1500
+51;Piña (Agua);Bebidas Naturales;1500
+52;Agua de Sapo;Bebidas Naturales;1500
+53;Horchata (Agua);Bebidas Naturales;1500
+54;Mango (Leche);Bebidas Naturales;2000
+55;Horchata (Leche);Bebidas Naturales;2000
+56;Coca Cola Original;Refrescos;1200
+57;Coca Cola Light;Refrescos;1200
+58;Coca Cola Zero;Refrescos;1200
+59;Fresca;Refrescos;1200
+60;Ginger Ale;Refrescos;1200
+61;Fanta Naranja;Refrescos;1200
+62;Fanta Kolita;Refrescos;1200
+63;Agua Embotellada;Refrescos;1200
+64;Michelado (Suplemento);Refrescos;300
+99;Producto Especial (Tablas);Especial;0`;
 
 const CATEGORY_ICONS = {
   Ensaladas: '🥗', 'Platos Principales': '🍽️', 'Para Compartir': '🥩', Postres: '🍰',
@@ -69,23 +115,26 @@ export default function App() {
 
   // Cargar datos
   useEffect(() => {
-    // 1. Menú
     const qMenu = query(collection(db, 'menu'), orderBy('id', 'asc'));
     const unsubMenu = onSnapshot(qMenu, (snap) => {
-      if (snap.empty) return; // Opcional: sembrar datos iniciales si está vacío
+      // Si no hay menú, sembramos el inicial
+      if (snap.empty) {
+        const parsed = parseCSV(INITIAL_CSV_DATA);
+        const batch = writeBatch(db);
+        parsed.forEach(p => batch.set(doc(collection(db, 'menu')), { ...p, createdAt: serverTimestamp() }));
+        batch.commit();
+        return;
+      }
       setMenu(snap.docs.map((d) => ({ docId: d.id, ...d.data() })));
     });
 
-    // 2. Mesas
     const qMesas = query(collection(db, 'mesas'), orderBy('createdAt', 'asc'));
     const unsubMesas = onSnapshot(qMesas, (snap) => {
       setTables(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
     });
 
-    // 3. Historial (Ventas recientes, opcional cargar solo las de hoy)
-    const qVentas = query(collection(db, 'ventas'), orderBy('fecha_hora', 'desc')); // Cuidado con muchos datos
+    const qVentas = query(collection(db, 'ventas'), orderBy('fecha_hora', 'desc'));
     const unsubVentas = onSnapshot(qVentas, (snap) => {
-       // Limitamos a las ultimas 50 para no saturar memoria en el cliente
        const ventas = snap.docs.slice(0, 50).map(d => ({id: d.id, ...d.data()}));
        setHistory(ventas);
     });
@@ -95,7 +144,7 @@ export default function App() {
 
   const activeTable = tables.find((t) => t.id === selectedTableId);
 
-  // Acciones Mesas
+  // Handlers
   const handleCreateTable = async (name) => {
     if (!name) return;
     await addDoc(collection(db, 'mesas'), {
@@ -120,7 +169,6 @@ export default function App() {
     await deleteDoc(doc(db, 'mesas', table.id));
   };
 
-  // Acciones POS
   const handleCloseOrder = async (tableData) => {
     const tableRef = doc(db, 'mesas', tableData.id);
     const ventasColl = collection(db, 'ventas');
@@ -136,30 +184,23 @@ export default function App() {
         const impuesto = current.payment === 'Tarjeta' ? subtotal * 0.13 : 0;
         const total = subtotal + impuesto;
 
-        // Registrar Venta
         const newVentaRef = doc(ventasColl);
         transaction.set(newVentaRef, {
           fecha_hora: new Date().toISOString(),
-          mesaId: tableData.id,
-          mesaNombre: current.name,
+          mesaId: tableData.id, mesaNombre: current.name,
           items, subtotal, impuesto_tarjeta: impuesto,
           total_final: total, medio_pago: current.payment || 'Efectivo',
           createdAt: serverTimestamp(),
         });
 
-        // Limpiar Mesa
         transaction.update(tableRef, {
           items: [], status: 'free', payment: 'Efectivo', ultima_actualizacion: serverTimestamp(),
         });
       });
-      setView('tables');
-      setSelectedTableId(null);
-    } catch (e) {
-      alert('Error: ' + e.message);
-    }
+      setView('tables'); setSelectedTableId(null);
+    } catch (e) { alert('Error: ' + e.message); }
   };
 
-  // Importar/Exportar
   const exportCSV = (onlyToday) => {
     if (history.length === 0) return alert('No hay historial cargado');
     const today = new Date();
@@ -206,8 +247,7 @@ export default function App() {
           <div>
             <h1 style={{ fontSize: '1.1rem', margin: 0, color: 'var(--primary)', fontWeight: 800 }}>Canto del Bosque</h1>
             <div className="flex-center" style={{ gap: '6px', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-              <span style={{ width: 8, height: 8, background: '#22c55e', borderRadius: '50%' }}></span>
-              POS Online
+              <span style={{ width: 8, height: 8, background: '#22c55e', borderRadius: '50%' }}></span> POS Online
             </div>
           </div>
         </div>
@@ -215,9 +255,7 @@ export default function App() {
         <div className="flex-center" style={{ gap: '0.5rem' }}>
           <input ref={fileInputRef} type="file" hidden onChange={handleImportMenu} accept=".csv" />
           <button className="btn btn-ghost" onClick={() => fileInputRef.current.click()} title="Importar">Importar</button>
-          
           <div style={{width: '1px', height: '24px', background: 'var(--border)', margin: '0 0.5rem'}}></div>
-
           <NavBtn icon={<Coffee size={18} />} label="Mesas" active={view === 'tables'} onClick={() => setView('tables')} />
           <NavBtn icon={<Archive size={18} />} label="Historial" active={view === 'history'} onClick={() => setView('history')} />
         </div>
@@ -241,10 +279,10 @@ export default function App() {
 function TablesManager({ tables, onCreate, onOpen, onDelete }) {
   const [name, setName] = useState('');
   return (
-    <div className="card" style={{ padding: '2rem', height: '100%', overflowY: 'auto' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2rem' }}>
-        <h2 className="text-xl">Salón Principal</h2>
-        <div className="flex-center" style={{ gap: '0.5rem' }}>
+    <div className="card" style={{ padding: '1.5rem', height: '100%', overflowY: 'auto' }}>
+      <div className="controls-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+        <h2 style={{ fontSize: '1.2rem', fontWeight: '800', margin: 0 }}>Salón Principal</h2>
+        <div className="input-group" style={{ display: 'flex', gap: '0.5rem' }}>
           <input className="input-search" style={{width: '200px'}} placeholder="Nueva Mesa..." value={name} onChange={e => setName(e.target.value)} />
           <button className="btn btn-primary" onClick={() => { onCreate(name); setName(''); }}><Plus size={18} /> Crear</button>
         </div>
@@ -279,12 +317,11 @@ function POSInterface({ table, menu, onUpdateTable, onCloseOrder, onBack }) {
   
   const categories = [...new Set(menu.map(i => i.category))];
   
-  // Cálculos
   const subtotal = (table.items || []).reduce((s, i) => s + (Number(i.price) || 0), 0);
   const tax = table.payment === 'Tarjeta' ? subtotal * 0.13 : 0;
   const total = subtotal + tax;
   
-  // Agrupación visual
+  // Agrupar productos
   const grouped = {};
   (table.items || []).forEach(i => {
     const key = `${i.id}-${i.price}`;
@@ -294,7 +331,7 @@ function POSInterface({ table, menu, onUpdateTable, onCloseOrder, onBack }) {
   });
   const cartItems = Object.values(grouped);
 
-  // Filtrado Menú
+  // Filtrado
   const filtered = search 
     ? menu.filter(i => i.name.toLowerCase().includes(search.toLowerCase())) 
     : cat ? menu.filter(i => i.category === cat) : [];
@@ -319,9 +356,9 @@ function POSInterface({ table, menu, onUpdateTable, onCloseOrder, onBack }) {
     <div className="pos-layout">
       {/* PANEL IZQUIERDO: CUENTA */}
       <div className="card order-panel">
-        <div style={{ padding: '1rem', borderBottom: '1px solid var(--border)', display: 'flex', gap: '1rem', alignItems: 'center' }}>
+        <div style={{ padding: '0.75rem 1rem', borderBottom: '1px solid var(--border)', display: 'flex', gap: '1rem', alignItems: 'center' }}>
           <button className="btn-icon" onClick={onBack}><ArrowLeft size={20} /></button>
-          <h2 style={{ fontSize: '1.2rem', fontWeight: 'bold', margin: 0 }}>{table.name}</h2>
+          <h2 style={{ fontSize: '1.1rem', fontWeight: 'bold', margin: 0 }}>{table.name}</h2>
         </div>
 
         <div className="order-items">
@@ -330,12 +367,12 @@ function POSInterface({ table, menu, onUpdateTable, onCloseOrder, onBack }) {
               <div className="flex-center" style={{ gap: '10px' }}>
                 <div className="qty-badge">{item.qty}</div>
                 <div>
-                  <div style={{ fontWeight: 600 }}>{item.name}</div>
+                  <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>{item.name}</div>
                   <div className="text-muted" style={{ fontSize: '0.8rem' }}>{formatColones(item.price)}</div>
                 </div>
               </div>
               <div className="flex-center" style={{ gap: '10px' }}>
-                <span style={{ fontWeight: 'bold' }}>{formatColones(item.price * item.qty)}</span>
+                <span style={{ fontWeight: 'bold', fontSize: '0.9rem' }}>{formatColones(item.price * item.qty)}</span>
                 <button className="btn-icon" style={{ color: 'var(--danger)', width: 28, height: 28 }} onClick={() => removeOne(item)}>
                   <Trash2 size={16} />
                 </button>
@@ -355,7 +392,7 @@ function POSInterface({ table, menu, onUpdateTable, onCloseOrder, onBack }) {
             ))}
           </div>
 
-          <div style={{ display: 'grid', gap: '0.5rem', fontSize: '0.9rem' }}>
+          <div style={{ display: 'grid', gap: '0.25rem', fontSize: '0.9rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <span className="text-muted">Subtotal</span>
               <b>{formatColones(subtotal)}</b>
@@ -364,7 +401,6 @@ function POSInterface({ table, menu, onUpdateTable, onCloseOrder, onBack }) {
               <span className="text-muted">Impuesto (13%)</span>
               <div style={{ textAlign: 'right' }}>
                 <b>{formatColones(tax)}</b>
-                {total > 0 && <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{((tax/total)*100).toFixed(2)}% del total</div>}
               </div>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '1.2rem', marginTop: '0.5rem', borderTop: '2px solid var(--border)', paddingTop: '0.5rem' }}>
@@ -373,7 +409,7 @@ function POSInterface({ table, menu, onUpdateTable, onCloseOrder, onBack }) {
             </div>
           </div>
           
-          <button className="btn btn-primary" style={{ width: '100%', marginTop: '1rem', justifyContent: 'center', padding: '12px' }} 
+          <button className="btn btn-primary" style={{ width: '100%', marginTop: '0.75rem', justifyContent: 'center', padding: '12px' }} 
             onClick={() => { if(window.confirm('¿Cerrar Cuenta?')) onCloseOrder(table); }}>
             COBRAR
           </button>
@@ -382,13 +418,13 @@ function POSInterface({ table, menu, onUpdateTable, onCloseOrder, onBack }) {
 
       {/* PANEL DERECHO: MENÚ */}
       <div className="card" style={{ padding: '1rem', display: 'flex', flexDirection: 'column', background: '#f8fafc' }}>
-        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
+        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
           {cat && !search && (
             <button className="btn btn-outline" onClick={() => setCat(null)}><ChevronLeft size={16} /></button>
           )}
           <div style={{ position: 'relative', flex: 1 }}>
             <Search size={16} style={{ position: 'absolute', left: 10, top: 12, color: '#94a3b8' }} />
-            <input className="input-search" style={{ paddingLeft: '34px' }} placeholder="Buscar..." value={search} onChange={e => setSearch(e.target.value)} />
+            <input className="input-search" style={{ paddingLeft: '34px' }} placeholder="Buscar producto..." value={search} onChange={e => { setSearch(e.target.value); setCat(null); }} />
           </div>
         </div>
 
@@ -421,9 +457,9 @@ function POSInterface({ table, menu, onUpdateTable, onCloseOrder, onBack }) {
 
 function HistoryManager({ history, onExport }) {
   return (
-    <div className="card" style={{ padding: '2rem', height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-        <h2 className="text-xl">Historial de Ventas</h2>
+    <div className="card" style={{ padding: '1rem', height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+        <h2 style={{fontSize:'1.2rem', fontWeight:'800'}}>Historial de Ventas</h2>
         <button className="btn btn-outline" onClick={onExport}>Exportar CSV</button>
       </div>
       
@@ -433,7 +469,6 @@ function HistoryManager({ history, onExport }) {
             <tr>
               <th>Hora</th>
               <th>Mesa</th>
-              <th>Items</th>
               <th>Pago</th>
               <th style={{ textAlign: 'right' }}>Total</th>
             </tr>
@@ -443,9 +478,6 @@ function HistoryManager({ history, onExport }) {
               <tr key={h.id}>
                 <td>{new Date(h.fecha_hora).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</td>
                 <td>{h.mesaNombre}</td>
-                <td className="text-muted" style={{ maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {h.items.map(i => i.name).join(', ')}
-                </td>
                 <td>
                   <span className={`badge ${h.medio_pago === 'Tarjeta' ? 'badge-card' : h.medio_pago === 'SINPE' ? 'badge-sinpe' : 'badge-cash'}`}>
                     {h.medio_pago}
