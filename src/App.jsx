@@ -79,7 +79,10 @@ const INITIAL_CSV_DATA = `id;nombre;categoria;precio
 62;Fanta Kolita;Refrescos;1200
 63;Agua Embotellada;Refrescos;1200
 64;Michelado (Suplemento);Refrescos;300
-99;Producto Especial (Tablas);Especial;0`;
+65;Botella de Vino (Precio Variable);Vinos;0
+66;Tabla Especial (Pequeña);Especial;15000
+67;Tabla Especial (Grande);Especial;20000
+68;Tabla Agrandada;Especial;25000`;
 
 const CATEGORY_ICONS = {
   Ensaladas: '🥗', 'Platos Principales': '🍽️', 'Para Compartir': '🥩', Postres: '🍰',
