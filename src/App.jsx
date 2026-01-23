@@ -93,8 +93,8 @@ export default function App() {
 
   useEffect(() => {
     // 1. MENU
-   const unsubMenu = onSnapshot(
-  query(collection(db, 'menu'), orderBy('id', 'asc')),
+const unsubMenu = onSnapshot(
+  query(collection(db, 'menu'), orderBy('createdAt', 'asc')),
   (snap) => {
     console.log('🔥 onSnapshot menu - docs:', snap.size);
     const docs = snap.docs.map(d => ({ docId: d.id, ...d.data() }));
@@ -106,6 +106,7 @@ export default function App() {
     alert('Error al escuchar la colección menu: ' + (err.message || err));
   }
 );
+
     // 2. MESAS
     const unsubMesas = onSnapshot(query(collection(db, 'mesas'), orderBy('createdAt', 'asc')), (snap) => {
       setTables(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
@@ -148,6 +149,8 @@ export default function App() {
       price: Number(price),
       createdAt: serverTimestamp()
     });
+    // Guardar el id del documento dentro del documento (útil para queries/orden)
+    await setDoc(doc(db, 'menu', ref.id), { id: ref.id }, { merge: true });
     console.log('✅ addDoc success id:', ref.id);
     alert('Producto agregado correctamente');
   } catch (e) {
@@ -156,17 +159,21 @@ export default function App() {
   }
 };
 
+
 const updateMenuItem = async (docId, data) => {
   try {
     console.log('✏️ updateMenuItem', docId, data);
-    await updateDoc(doc(db, 'menu', docId), data);
-    console.log('✅ updateDoc success');
+    const ref = doc(db, 'menu', docId);
+    // Usamos setDoc con merge para evitar sobrescribir accidentalmente otros campos
+    await setDoc(ref, { ...data, updatedAt: serverTimestamp() }, { merge: true });
+    console.log('✅ setDoc(merge) success for', docId);
     alert('Producto actualizado');
   } catch (e) {
     console.error('❌ updateMenuItem error', e);
     alert('Error al actualizar producto: ' + (e.message || e));
   }
 };
+
 
 const deleteMenuItem = async (docId) => {
   try {
@@ -1130,22 +1137,35 @@ function MenuManager({ menu, onAdd, onUpdate, onDelete, onBack }) {
               </div>
             </div>
             <div style={{ display: 'flex', gap: 6 }}>
-              <button
-                className="btn btn-outline"
-                onClick={() => {
-                  const nuevoNombre = prompt('Nombre', item.name);
-                  const nuevoPrecio = prompt('Precio', item.price);
-                  if (nuevoNombre && nuevoPrecio) {
-                    onUpdate(item.docId, {
-                      name: nuevoNombre,
-                      price: Number(nuevoPrecio),
-                      category: item.category
-                    });
-                  }
-                }}
-              >
-                Editar
-              </button>
+<button
+  className="btn btn-outline"
+  onClick={async () => {
+    try {
+      const nuevoNombre = prompt('Nombre', item.name);
+      if (nuevoNombre === null) return; // cancel
+      const nuevoPrecioRaw = prompt('Precio', item.price);
+      if (nuevoPrecioRaw === null) return; // cancel
+
+      const nuevoPrecio = Number(nuevoPrecioRaw);
+      if (nuevoNombre.trim() === '' || Number.isNaN(nuevoPrecio)) {
+        return alert('Nombre vacío o precio inválido.');
+      }
+
+      // Mantener la categoría existente (si quieres permitir editarla, añade otro prompt/select)
+      await onUpdate(item.docId, {
+        name: nuevoNombre.trim(),
+        price: nuevoPrecio,
+        category: item.category
+      });
+    } catch (err) {
+      console.error('Error al editar item (UI):', err);
+      alert('Error al editar: ' + (err.message || err));
+    }
+  }}
+>
+  Editar
+</button>
+
               <button
                 className="btn btn-danger"
                 onClick={() => onDelete(item.docId)}
