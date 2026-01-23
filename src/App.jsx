@@ -93,11 +93,19 @@ export default function App() {
 
   useEffect(() => {
     // 1. MENU
-    const unsubMenu = onSnapshot(query(collection(db, 'menu'), orderBy('id', 'asc')), (snap) => {
-      if (snap.empty) { /* Semilla inicial si vacio... */ }
-      setMenu(snap.docs.map((d) => ({ docId: d.id, ...d.data() })));
-    });
-
+   const unsubMenu = onSnapshot(
+  query(collection(db, 'menu'), orderBy('id', 'asc')),
+  (snap) => {
+    console.log('🔥 onSnapshot menu - docs:', snap.size);
+    const docs = snap.docs.map(d => ({ docId: d.id, ...d.data() }));
+    console.log('MENU docs:', docs);
+    setMenu(docs);
+  },
+  (err) => {
+    console.error('❌ onSnapshot menu error:', err);
+    alert('Error al escuchar la colección menu: ' + (err.message || err));
+  }
+);
     // 2. MESAS
     const unsubMesas = onSnapshot(query(collection(db, 'mesas'), orderBy('createdAt', 'asc')), (snap) => {
       setTables(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
