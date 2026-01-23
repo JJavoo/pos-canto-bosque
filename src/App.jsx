@@ -139,24 +139,48 @@ export default function App() {
 
   const activeTable = tables.find((t) => t.id === selectedTableId);
 
-  const addMenuItem = async (category, name, price) => {
-  if (!name) return;
-  await addDoc(collection(db, 'menu'), {
-    name,
-    category,
-    price: Number(price),
-    createdAt: serverTimestamp()
-  });
+ const addMenuItem = async (category, name, price) => {
+  try {
+    console.log('➕ addMenuItem', { category, name, price });
+    const ref = await addDoc(collection(db, 'menu'), {
+      name,
+      category,
+      price: Number(price),
+      createdAt: serverTimestamp()
+    });
+    console.log('✅ addDoc success id:', ref.id);
+    alert('Producto agregado correctamente');
+  } catch (e) {
+    console.error('❌ addMenuItem error', e);
+    alert('Error al agregar producto: ' + (e.message || e));
+  }
 };
 
 const updateMenuItem = async (docId, data) => {
-  await updateDoc(doc(db, 'menu', docId), data);
+  try {
+    console.log('✏️ updateMenuItem', docId, data);
+    await updateDoc(doc(db, 'menu', docId), data);
+    console.log('✅ updateDoc success');
+    alert('Producto actualizado');
+  } catch (e) {
+    console.error('❌ updateMenuItem error', e);
+    alert('Error al actualizar producto: ' + (e.message || e));
+  }
 };
 
 const deleteMenuItem = async (docId) => {
-  if (!window.confirm('¿Eliminar producto?')) return;
-  await deleteDoc(doc(db, 'menu', docId));
+  try {
+    if (!window.confirm('¿Eliminar producto?')) return;
+    console.log('🗑️ deleteMenuItem', docId);
+    await deleteDoc(doc(db, 'menu', docId));
+    console.log('✅ deleteDoc success');
+    alert('Producto eliminado');
+  } catch (e) {
+    console.error('❌ deleteMenuItem error', e);
+    alert('Error al eliminar producto: ' + (e.message || e));
+  }
 };
+
 
 
   // --- HANDLERS MESAS ---
