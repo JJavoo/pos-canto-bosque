@@ -682,47 +682,164 @@ function POSInterface({ table, menu, onUpdateTable, onCloseOrder, onBack }) {
 }
 
 function HistoryManager({ history }) {
+  // Estado para la fecha seleccionada (por defecto hoy)
+  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+
+  // Filtrar historial según la fecha seleccionada
+  const filteredHistory = history.filter(h => {
+    const hDate = new Date(h.fecha_hora).toISOString().split('T')[0];
+    return hDate === selectedDate;
+  });
+
+  // Calcular total del día seleccionado
+  const dayTotal = filteredHistory.reduce((sum, item) => sum + (Number(item.total_final) || 0), 0);
+
+  // Lógica para descargar EL REPORTE DEL DÍA (Todas las facturas en un archivo)
+  const downloadDailyReport = () => {
+    if (filteredHistory.length === 0) return alert("No hay ventas en la fecha seleccionada.");
+
+    let csv = "REPORTE DIARIO DE VENTAS\n";
+    csv += `Fecha,${selectedDate}\n`;
+    csv += `Generado el,${new Date().toLocaleString()}\n`;
+    csv += `Total Ventas,${filteredHistory.length}\n`;
+    csv += `MONTO TOTAL DEL DIA,${dayTotal}\n\n`;
+    csv += "========================================\n\n";
+
+    // Recorremos cada venta y la agregamos al CSV
+    filteredHistory.forEach((sale, index) => {
+      const time = new Date(sale.fecha_hora).toLocaleTimeString();
+      
+      csv += `VENTA #${index + 1} | Hora: ${time} | ${sale.mesaNombre}\n`;
+      csv += `Metodo Pago: ${sale.medio_pago}\n`;
+      csv += `Producto,Cantidad,Precio Unit,Subtotal\n`;
+
+      // Items de esa venta
+      // Re-agrupar items para que se vea ordenado (igual que en la factura individual)
+      const grouped = {};
+      (sale.items || []).forEach(i => {
+        const key = `${i.name}-${i.price}`;
+        if (!grouped[key]) grouped[key] = { name: i.name, price: i.price, qty: 0 };
+        grouped[key].qty += (i.qty || 1); // Si viene de split puede tener qty, si no, es 1
+      });
+
+      Object.values(grouped).forEach(item => {
+        csv += `"${item.name}",${item.qty},${item.price},${item.price * item.qty}\n`;
+      });
+
+      csv += `,,,Total Venta: ${sale.total_final}\n`;
+      csv += "----------------------------------------\n";
+    });
+
+    // Crear y descargar el archivo
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.setAttribute("href", url);
+    link.setAttribute("download", `Reporte_Diario_${selectedDate}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Lógica para descargar factura individual (la que ya tenías, movida aquí adentro o importada)
+  const downloadSingleInvoice = (saleData) => {
+    let csvContent = "data:text/csv;charset=utf-8,";
+    csvContent += `Empresa,Canto del Bosque\nFecha,${new Date(saleData.fecha_hora).toLocaleString()}\nMesa,${saleData.mesaNombre}\nPago,${saleData.medio_pago}\n\nProducto,Cantidad,Precio,Subtotal\n`;
+    
+    const grouped = {};
+    saleData.items.forEach(i => {
+      const key = `${i.name}-${i.price}`;
+      if (!grouped[key]) grouped[key] = { name: i.name, price: i.price, qty: 0 };
+      grouped[key].qty += (i.qty || 1);
+    });
+
+    Object.values(grouped).forEach(item => {
+      csvContent += `"${item.name}",${item.qty},${item.price},${item.price * item.qty}\n`;
+    });
+    csvContent += `\n,,TOTAL,${saleData.total_final}\n`;
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.href = encodedUri;
+    link.download = `Factura_${saleData.mesaNombre}_${new Date(saleData.fecha_hora).getTime()}.csv`;
+    link.click();
+  };
+
   return (
     <div className="card" style={{ padding: '1rem', height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-        <h2 style={{fontSize:'1.2rem', fontWeight:'800'}}>Historial de Ventas</h2>
+      
+      {/* CABECERA CON CONTROLES */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '10px' }}>
+        <div>
+           <h2 style={{fontSize:'1.2rem', fontWeight:'800', margin:0}}>Historial de Ventas</h2>
+           <div style={{fontSize:'0.85rem', color:'var(--text-muted)'}}>
+             Ventas del día: <b>{formatColones(dayTotal)}</b> ({filteredHistory.length} ops)
+           </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+          {/* SELECTOR DE FECHA */}
+          <div style={{position:'relative'}}>
+             <input 
+               type="date" 
+               className="input-search" 
+               value={selectedDate} 
+               onChange={(e) => setSelectedDate(e.target.value)}
+               style={{paddingRight: '10px'}}
+             />
+          </div>
+
+          {/* BOTÓN DESCARGAR DIA COMPLETO */}
+          <button className="btn btn-primary" onClick={downloadDailyReport} title="Descargar reporte completo de este día">
+            <Archive size={18} /> Descargar Día
+          </button>
+        </div>
       </div>
       
-      <div className="table-responsive" style={{ flex: 1 }}>
+      {/* TABLA DE VENTAS FILTRADA */}
+      <div className="table-responsive" style={{ flex: 1, border: '1px solid var(--border)', borderRadius: '8px' }}>
         <table className="history-table">
           <thead>
-            <tr>
-              <th>Fecha</th>
+            <tr style={{background: '#f8fafc'}}>
+              <th>Hora</th>
               <th>Mesa/Origen</th>
               <th>Items</th>
               <th>Total</th>
-              <th>Acción</th>
+              <th style={{textAlign:'center'}}>Factura</th>
             </tr>
           </thead>
           <tbody>
-            {history.map(h => (
-              <tr key={h.id}>
-                <td>
-                  <div>{new Date(h.fecha_hora).toLocaleDateString()}</div>
-                  <div style={{fontSize:'0.75rem', color:'#64748b'}}>{new Date(h.fecha_hora).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>
-                </td>
-                <td>
-                  <div style={{fontWeight:'bold'}}>{h.mesaNombre}</div>
-                  <div className={`badge ${h.medio_pago === 'Tarjeta' ? 'badge-card' : 'badge-cash'}`} style={{fontSize:'0.7rem', display:'inline-block', marginTop:'2px'}}>
-                    {h.medio_pago}
-                  </div>
-                </td>
-                <td style={{fontSize:'0.85rem', maxWidth:'200px'}}>
-                   {h.items && h.items.length} productos
-                </td>
-                <td style={{ fontWeight: 'bold' }}>{formatColones(h.total_final)}</td>
-                <td>
-                  <button className="btn-icon" onClick={() => downloadInvoiceCSV(h)} title="Descargar Factura CSV">
-                    <FileText size={18} />
-                  </button>
+            {filteredHistory.length === 0 ? (
+              <tr>
+                <td colSpan="5" style={{textAlign:'center', padding:'2rem', color:'#94a3b8'}}>
+                  No hay ventas registradas para el <b>{selectedDate}</b>
                 </td>
               </tr>
-            ))}
+            ) : (
+              filteredHistory.map(h => (
+                <tr key={h.id}>
+                  <td>
+                    {new Date(h.fecha_hora).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                  </td>
+                  <td>
+                    <div style={{fontWeight:'bold'}}>{h.mesaNombre}</div>
+                    <div className={`badge ${h.medio_pago === 'Tarjeta' ? 'badge-card' : 'badge-cash'}`} style={{fontSize:'0.7rem', display:'inline-block', marginTop:'2px'}}>
+                      {h.medio_pago}
+                    </div>
+                  </td>
+                  <td style={{fontSize:'0.85rem', maxWidth:'200px', color:'var(--text-muted)'}}>
+                     {/* Mostramos resumen breve de items */}
+                     {(h.items || []).length} items
+                  </td>
+                  <td style={{ fontWeight: 'bold' }}>{formatColones(h.total_final)}</td>
+                  <td style={{ textAlign: 'center' }}>
+                    <button className="btn-icon" onClick={() => downloadSingleInvoice(h)} title="Descargar Factura Individual">
+                      <FileText size={18} />
+                    </button>
+                  </td>
+                </tr>
+              ))
+            )}
           </tbody>
         </table>
       </div>
