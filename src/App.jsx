@@ -166,11 +166,10 @@ export default function App() {
 
   // 3. DIVIDIR CUENTA & COBRO PARCIAL
   // Esta función ahora acepta "itemsToPay" para permitir cobros parciales (Split Bill)
+  // --- EN APP (Sustituir handleCloseOrder) ---
   const handleCloseOrder = async (tableData, itemsToPay = null, paymentMethod = 'Efectivo') => {
     const tableRef = doc(db, 'mesas', tableData.id);
     const ventasColl = collection(db, 'ventas');
-
-    // Si itemsToPay es null, cobramos TODO. Si es un array, cobramos solo esos.
     const isPartial = itemsToPay !== null;
     const finalItems = isPartial ? itemsToPay : (tableData.items || []);
     
@@ -186,6 +185,7 @@ export default function App() {
 
         // Calculos
         const subtotal = finalItems.reduce((s, it) => s + (Number(it.price) || 0), 0);
+        // Si es tarjeta, suma 13%
         const impuesto = paymentMethod === 'Tarjeta' ? subtotal * 0.13 : 0;
         const total = subtotal + impuesto;
 
@@ -204,10 +204,21 @@ export default function App() {
           tipo: isPartial ? 'Parcial' : 'Completa'
         });
 
-        // Actualizar Mesa
+        // --- LÓGICA DE CABAÑAS VINCULADAS ---
+        // Buscamos si hay items que sean cobros de cabaña (usaremos una propiedad 'linkedCabinId')
+        finalItems.forEach(item => {
+            if (item.linkedCabinId) {
+                const cabinRef = doc(db, 'cabanas', item.linkedCabinId);
+                // Actualizamos solo el estado de pago, NO liberamos la cabaña (sigue Ocupada)
+                transaction.update(cabinRef, {
+                    'info.estadoPago': 'Pagado'
+                });
+            }
+        });
+        // -------------------------------------
+
+        // Actualizar Mesa (Borrar items o limpiar mesa)
         if (isPartial) {
-          // Remover SOLO los items pagados del array original
-          // Usamos instanceId para saber exactamente cuáles borrar
           const idsToPay = finalItems.map(i => i.instanceId);
           const remainingItems = allItems.filter(i => !idsToPay.includes(i.instanceId));
           
@@ -217,7 +228,6 @@ export default function App() {
             ultima_actualizacion: serverTimestamp(),
           });
         } else {
-          // Cobro Total: Limpiar mesa
           transaction.update(tableRef, {
             items: [], status: 'free', payment: 'Efectivo', ultima_actualizacion: serverTimestamp(),
           });
@@ -232,7 +242,7 @@ export default function App() {
       }
     } catch (e) { alert('Error: ' + e.message); }
   };
-
+  
   // --- HANDLERS CABAÑAS ---
   const handleUpdateCabana = async (docId, newData) => {
     await updateDoc(doc(db, 'cabanas', docId), newData);
@@ -287,7 +297,7 @@ export default function App() {
           <TablesManager tables={tables} onCreate={handleCreateTable} onOpen={(id) => { setSelectedTableId(id); setView('pos'); }} onDelete={handleDeleteTable} onRename={handleRenameTable} />
         )}
         {view === 'pos' && activeTable && (
-          <POSInterface table={activeTable} menu={menu} onUpdateTable={handleUpdateTable} onCloseOrder={handleCloseOrder} onBack={() => setView('tables')} />
+          <POSInterface table={activeTable} menu={menu} cabanas={cabanas} onUpdateTable={handleUpdateTable} onCloseOrder={handleCloseOrder} onBack={() => setView('tables')} />
         )}
         {view === 'cabanas' && (
           <CabinsManager cabanas={cabanas} onUpdate={handleUpdateCabana} onCheckout={handleCheckoutCabana} />
@@ -342,9 +352,11 @@ function TablesManager({ tables, onCreate, onOpen, onDelete, onRename }) {
 }
 
 // 4. MODULO CABAÑAS
+// Sustituye tu componente CabinsManager por este:
 function CabinsManager({ cabanas, onUpdate, onCheckout }) {
   const [editingId, setEditingId] = useState(null);
   const [tempData, setTempData] = useState({});
+  const [payingCabin, setPayingCabin] = useState(null); // Para el modal de cobro
 
   const startEdit = (c) => {
     setEditingId(c.docId);
@@ -354,7 +366,7 @@ function CabinsManager({ cabanas, onUpdate, onCheckout }) {
   const saveEdit = (docId) => {
     onUpdate(docId, { 
       info: tempData,
-      status: 'Ocupada'
+      status: 'Ocupada' // Aseguramos que siga ocupada al editar
     });
     setEditingId(null);
   };
@@ -363,16 +375,70 @@ function CabinsManager({ cabanas, onUpdate, onCheckout }) {
     setTempData(prev => ({ ...prev, [field]: val }));
   };
 
+  // --- LÓGICA DE PAGO DIRECTO DE CABAÑA ---
+  const handlePayCabin = async (method) => {
+    if(!payingCabin) return;
+    const montoBase = parseFloat(payingCabin.info.monto || 0);
+    const impuesto = method === 'Tarjeta' ? montoBase * 0.13 : 0;
+    const total = montoBase + impuesto;
+
+    if(!window.confirm(`¿Confirmar cobro de ${formatColones(total)} (${method}) para ${payingCabin.name}?`)) return;
+
+    // 1. Crear Factura
+    await addDoc(collection(db, 'ventas'), {
+        fecha_hora: new Date().toISOString(),
+        mesaNombre: `HOSPEDAJE - ${payingCabin.name}`,
+        items: [{ name: `Alquiler ${payingCabin.name}`, price: montoBase, qty: 1 }],
+        subtotal: montoBase,
+        impuesto_tarjeta: impuesto,
+        total_final: total,
+        medio_pago: method,
+        createdAt: serverTimestamp(),
+        tipo: 'Hospedaje'
+    });
+
+    // 2. Actualizar cabaña (Solo estadoPago, sigue Ocupada)
+    await onUpdate(payingCabin.docId, {
+        'info.estadoPago': 'Pagado'
+    });
+
+    setPayingCabin(null);
+    alert("Cobro registrado exitosamente. La cabaña sigue OCUPADA.");
+  };
+
   return (
     <div className="card" style={{ padding: '1.5rem', height: '100%', overflowY: 'auto', background: '#f8fafc' }}>
        <h2 style={{ fontSize: '1.2rem', fontWeight: '800', marginBottom: '1.5rem' }}>Gestión de Cabañas</h2>
+       
+       {/* MODAL DE PAGO (Simple Overlay) */}
+       {payingCabin && (
+           <div style={{position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.5)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:100}}>
+               <div className="card" style={{padding:'2rem', width:'300px', textAlign:'center'}}>
+                   <h3>Cobrar {payingCabin.name}</h3>
+                   <p className="text-muted">Monto Base: {formatColones(payingCabin.info.monto)}</p>
+                   <div style={{display:'grid', gap:'10px', marginTop:'1rem'}}>
+                       <button className="btn btn-primary" onClick={() => handlePayCabin('Efectivo')}>
+                           💵 Efectivo (Sin IVA)
+                       </button>
+                       <button className="btn btn-primary" onClick={() => handlePayCabin('Tarjeta')}>
+                           💳 Tarjeta (+13% IVA)
+                       </button>
+                       <button className="btn btn-outline" onClick={() => setPayingCabin(null)} style={{marginTop:'10px'}}>
+                           Cancelar
+                       </button>
+                   </div>
+               </div>
+           </div>
+       )}
+
        <div className="category-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))' }}>
          {cabanas.map(c => {
            const isOccupied = c.status === 'Ocupada';
            const isEditing = editingId === c.docId;
+           const isPaid = c.info?.estadoPago === 'Pagado';
 
            return (
-             <div key={c.docId} className="card" style={{ padding: '1rem', borderTop: `4px solid ${isOccupied ? '#ef4444' : '#22c55e'}` }}>
+             <div key={c.docId} className="card" style={{ padding: '1rem', borderTop: `4px solid ${isOccupied ? (isPaid ? '#22c55e' : '#ef4444') : '#94a3b8'}` }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem' }}>
                   <div style={{ fontWeight: 'bold', fontSize: '1.1rem' }}>{c.name}</div>
                   <div className={`badge ${isOccupied ? 'badge-card' : 'badge-cash'}`}>{c.status}</div>
@@ -391,10 +457,7 @@ function CabinsManager({ cabanas, onUpdate, onCheckout }) {
                       <input type="date" className="input-search" value={tempData.salida || ''} onChange={e => handleChange('salida', e.target.value)} />
                     </div>
                     <input type="number" className="input-search" placeholder="Monto Total" value={tempData.monto || ''} onChange={e => handleChange('monto', e.target.value)} />
-                    <select className="input-search" value={tempData.estadoPago || ''} onChange={e => handleChange('estadoPago', e.target.value)}>
-                      <option value="Pendiente">Pendiente</option>
-                      <option value="Pagado">Pagado</option>
-                    </select>
+                    {/* Quitamos el select manual de pago porque ahora lo hacemos con botón, aunque puedes dejarlo si quieres corregir a mano */}
                     <div style={{display:'flex', gap:'5px', marginTop:'5px'}}>
                       <button className="btn btn-primary" onClick={() => saveEdit(c.docId)} style={{flex:1}}><Save size={16}/> Guardar</button>
                       <button className="btn btn-outline" onClick={() => setEditingId(null)} style={{flex:1}}>Cancelar</button>
@@ -407,13 +470,28 @@ function CabinsManager({ cabanas, onUpdate, onCheckout }) {
                         <div>👤 <b>{c.info.uesped}</b> ({c.info.origen})</div>
                         <div>📅 {c.info.entrada} al {c.info.salida}</div>
                         <div>💰 {formatColones(c.info.monto)} 
-                          <span style={{marginLeft:5, color: c.info.estadoPago === 'Pagado' ? 'green' : 'orange'}}>
-                             ({c.info.estadoPago})
+                          <span style={{marginLeft:5, fontWeight:'bold', color: isPaid ? 'green' : 'red'}}>
+                             ({isPaid ? 'PAGADO' : 'PENDIENTE'})
                           </span>
                         </div>
-                        <div style={{display:'flex', gap:'5px', marginTop:'1rem'}}>
-                           <button className="btn btn-outline" style={{flex:1}} onClick={() => startEdit(c)}><Edit size={14}/> Editar</button>
-                           <button className="btn btn-primary" style={{flex:1, background: '#ef4444', borderColor:'#ef4444'}} onClick={() => onCheckout(c)}>Check Out</button>
+                        
+                        <div style={{display:'grid', gridTemplateColumns: '1fr 1fr', gap:'5px', marginTop:'1rem'}}>
+                           {/* Botón Editar */}
+                           <button className="btn btn-outline" onClick={() => startEdit(c)}><Edit size={14}/> Editar</button>
+                           
+                           {/* Botón Check Out (Solo libera) */}
+                           <button className="btn btn-primary" style={{background: '#334155', borderColor:'#334155'}} onClick={() => onCheckout(c)}>Check Out</button>
+
+                           {/* Botón COBRAR (Solo si está pendiente) */}
+                           {!isPaid && (
+                               <button 
+                                className="btn btn-primary" 
+                                style={{gridColumn: 'span 2', justifyContent:'center', marginTop:'5px', background:'#22c55e', borderColor:'#22c55e'}}
+                                onClick={() => setPayingCabin(c)}
+                               >
+                                   💸 Cobrar Ahora
+                               </button>
+                           )}
                         </div>
                       </div>
                     ) : (
@@ -432,13 +510,16 @@ function CabinsManager({ cabanas, onUpdate, onCheckout }) {
   )
 }
 
-function POSInterface({ table, menu, onUpdateTable, onCloseOrder, onBack }) {
+unction POSInterface({ table, menu, cabanas, onUpdateTable, onCloseOrder, onBack }) {
   const [cat, setCat] = useState(null);
   const [search, setSearch] = useState('');
   
+  // --- NUEVO ESTADO PARA CABAÑAS ---
+  const [showCabinSelector, setShowCabinSelector] = useState(false); 
+
   // ESTADOS PARA DIVIDIR CUENTA
   const [isSplitMode, setIsSplitMode] = useState(false);
-  const [selectedForSplit, setSelectedForSplit] = useState([]); // Array de instanceIds
+  const [selectedForSplit, setSelectedForSplit] = useState([]); 
 
   const categories = [...new Set(menu.map(i => i.category))];
   
@@ -453,7 +534,6 @@ function POSInterface({ table, menu, onUpdateTable, onCloseOrder, onBack }) {
   const cartItems = Object.values(grouped);
 
   // Totales
-  // Si estamos en modo Split, calculamos sobre lo seleccionado, si no, sobre todo
   const itemsToCalc = isSplitMode 
     ? (table.items || []).filter(i => selectedForSplit.includes(i.instanceId))
     : (table.items || []);
@@ -465,6 +545,29 @@ function POSInterface({ table, menu, onUpdateTable, onCloseOrder, onBack }) {
   const filtered = search 
     ? menu.filter(i => i.name.toLowerCase().includes(search.toLowerCase())) 
     : cat ? menu.filter(i => i.category === cat) : [];
+
+  // --- NUEVA LÓGICA PARA CABAÑAS ---
+  const handleAddCabinToOrder = (cabin) => {
+      const amount = parseFloat(cabin.info.monto || 0);
+      
+      // Creamos un item especial que incluye el ID de la cabaña
+      const newItem = { 
+          id: `cabin-${cabin.docId}`, // ID ficticio
+          name: `Hospedaje: ${cabin.name} (${cabin.info.uesped})`, 
+          category: 'Hospedaje', 
+          price: amount,
+          qty: 1,
+          instanceId: Date.now().toString(),
+          linkedCabinId: cabin.docId // <--- IMPORTANTE: Esto le dice a App que actualice la cabaña al cobrar
+      };
+
+      onUpdateTable({ ...table, items: [...(table.items || []), newItem] });
+      setShowCabinSelector(false);
+  };
+
+  // Filtramos cabañas que tienen deuda pendiente
+  const pendingCabins = (cabanas || []).filter(c => c.status === 'Ocupada' && c.info?.estadoPago !== 'Pagado');
+
 
   // --- ACTIONS ---
   const addItem = (item) => {
@@ -481,7 +584,7 @@ function POSInterface({ table, menu, onUpdateTable, onCloseOrder, onBack }) {
 
   const increaseQty = (groupItem) => {
     if(isSplitMode) return;
-    const newItem = { ...groupItem, instanceId: Date.now() + Math.random().toString(), qty: 1, ids: [] }; // Limpiar metadatos de grupo
+    const newItem = { ...groupItem, instanceId: Date.now() + Math.random().toString(), qty: 1, ids: [] }; 
     onUpdateTable({ ...table, items: [...(table.items || []), newItem] });
   };
 
@@ -505,19 +608,14 @@ function POSInterface({ table, menu, onUpdateTable, onCloseOrder, onBack }) {
     }
   };
 
-  // Función auxiliar para seleccionar X cantidad de un grupo en modo split
   const handleGroupSplitClick = (group) => {
     if(!isSplitMode) return;
-    
-    // Cuántos de este grupo ya están seleccionados?
     const selectedIdsInGroup = group.ids.filter(id => selectedForSplit.includes(id));
     const allSelected = selectedIdsInGroup.length === group.ids.length;
 
     if (allSelected) {
-      // Deseleccionar todos
       setSelectedForSplit(prev => prev.filter(id => !group.ids.includes(id)));
     } else {
-      // Seleccionar el siguiente disponible
       const nextId = group.ids.find(id => !selectedForSplit.includes(id));
       if(nextId) toggleSplitSelection(nextId);
     }
@@ -527,11 +625,11 @@ function POSInterface({ table, menu, onUpdateTable, onCloseOrder, onBack }) {
     if (isSplitMode) {
       if(selectedForSplit.length === 0) return alert("Selecciona productos para cobrar");
       if(!window.confirm(`¿Cobrar ₡${formatColones(total)} a la subcuenta actual?`)) return;
-      onCloseOrder(table, itemsToCalc, table.payment); // Enviamos solo items seleccionados
-      setSelectedForSplit([]); // Reset selección
+      onCloseOrder(table, itemsToCalc, table.payment); 
+      setSelectedForSplit([]); 
     } else {
       if(!window.confirm('¿Cerrar cuenta completa?')) return;
-      onCloseOrder(table, null, table.payment); // Null = Todo
+      onCloseOrder(table, null, table.payment); 
     }
   };
 
@@ -557,7 +655,6 @@ function POSInterface({ table, menu, onUpdateTable, onCloseOrder, onBack }) {
            {isSplitMode && <div style={{background:'#e0f2fe', padding:'5px', fontSize:'0.8rem', textAlign:'center', color:'#0369a1'}}>Selecciona los productos que paga esta persona</div>}
           
           {cartItems.map(item => {
-            // Logica visual para split: Cuántos seleccionados de este grupo?
             const qtySelected = item.ids.filter(id => selectedForSplit.includes(id)).length;
             const isFullySelected = qtySelected === item.qty && item.qty > 0;
             const isPartiallySelected = qtySelected > 0 && !isFullySelected;
@@ -573,7 +670,6 @@ function POSInterface({ table, menu, onUpdateTable, onCloseOrder, onBack }) {
             >
               <div className="flex-center" style={{ gap: '10px', flex: 1 }}>
                 
-                {/* CONTROLES CANTIDAD (Ocultos en Split Mode, mostramos seleccionados) */}
                 {!isSplitMode ? (
                   <div style={{ display: 'flex', alignItems: 'center', background: '#f1f5f9', borderRadius: '8px', padding: '2px' }} onClick={e => e.stopPropagation()}>
                     <button onClick={() => decreaseQty(item)} style={{ border: 'none', background: 'transparent', padding: '4px 8px', cursor: 'pointer', color: 'var(--danger)' }}><Minus size={14} /></button>
@@ -581,9 +677,9 @@ function POSInterface({ table, menu, onUpdateTable, onCloseOrder, onBack }) {
                     <button onClick={() => increaseQty(item)} style={{ border: 'none', background: 'transparent', padding: '4px 8px', cursor: 'pointer', color: 'var(--primary)' }}><Plus size={14} /></button>
                   </div>
                 ) : (
-                   <div className="qty-badge" style={{background: qtySelected > 0 ? 'var(--primary)' : '#cbd5e1'}}>
-                      {qtySelected} / {item.qty}
-                   </div>
+                    <div className="qty-badge" style={{background: qtySelected > 0 ? 'var(--primary)' : '#cbd5e1'}}>
+                       {qtySelected} / {item.qty}
+                    </div>
                 )}
 
                 <div style={{ overflow: 'hidden' }}>
@@ -594,7 +690,6 @@ function POSInterface({ table, menu, onUpdateTable, onCloseOrder, onBack }) {
 
               <div className="flex-center" style={{ gap: '10px' }}>
                 <span style={{ fontWeight: 'bold', fontSize: '0.9rem' }}>
-                    {/* En split mostramos el total de lo seleccionado */}
                     {formatColones(item.price * (isSplitMode ? qtySelected : item.qty))}
                 </span>
                 {!isSplitMode && (
@@ -643,9 +738,45 @@ function POSInterface({ table, menu, onUpdateTable, onCloseOrder, onBack }) {
         </div>
       </div>
 
-      {/* RIGHT: MENU (Deshabilitado visualmente en modo split para evitar confusión) */}
+      {/* RIGHT: MENU */}
       <div className="card" style={{ padding: '1rem', display: 'flex', flexDirection: 'column', background: '#f8fafc', opacity: isSplitMode ? 0.5 : 1, pointerEvents: isSplitMode ? 'none' : 'auto' }}>
+        
+        {/* --- INICIO: CABIN SELECTOR MODAL --- */}
+        {showCabinSelector && (
+             <div style={{position:'absolute', top:0, left:0, right:0, bottom:0, background:'white', zIndex:50, padding:'1rem', overflowY:'auto', borderRadius:'8px'}}>
+                  <div style={{display:'flex', justifyContent:'space-between', marginBottom:'1rem'}}>
+                      <h3>Seleccionar Cabaña</h3>
+                      <button className="btn-icon" onClick={() => setShowCabinSelector(false)}><XCircle size={24}/></button>
+                  </div>
+                  {pendingCabins.length === 0 ? <p className="text-muted">No hay cabañas con deuda.</p> : (
+                      <div style={{display:'grid', gap:'10px'}}>
+                          {pendingCabins.map(c => (
+                              <button key={c.docId} className="cat-card" style={{width:'100%', textAlign:'left', padding:'10px', height:'auto', alignItems:'flex-start'}} onClick={() => handleAddCabinToOrder(c)}>
+                                   <div style={{width:'100%'}}>
+                                     <div style={{fontWeight:'bold', fontSize:'1rem'}}>{c.name}</div>
+                                     <div style={{fontSize:'0.85rem', color:'#64748b'}}>{c.info.uesped}</div>
+                                     <div style={{fontWeight:'bold', color:'var(--primary)', marginTop:'4px'}}>Por cobrar: {formatColones(c.info.monto)}</div>
+                                   </div>
+                              </button>
+                          ))}
+                      </div>
+                  )}
+             </div>
+        )}
+        {/* --- FIN: CABIN SELECTOR MODAL --- */}
+
         <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
+          
+          {/* --- BOTÓN NUEVO PARA CABAÑAS --- */}
+          <button 
+             className="btn btn-outline" 
+             title="Cargar Cabaña"
+             onClick={() => setShowCabinSelector(true)}
+             style={{color: 'var(--primary)', borderColor: 'var(--primary)', padding:'0 10px'}}
+          >
+             <Tent size={18} />
+          </button>
+
           {cat && !search && (
             <button className="btn btn-outline" onClick={() => setCat(null)}><ChevronLeft size={16} /></button>
           )}
@@ -680,7 +811,6 @@ function POSInterface({ table, menu, onUpdateTable, onCloseOrder, onBack }) {
     </div>
   );
 }
-
 function HistoryManager({ history }) {
   // Estado para la fecha seleccionada (por defecto hoy)
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
