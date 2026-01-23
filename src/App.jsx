@@ -510,7 +510,7 @@ function CabinsManager({ cabanas, onUpdate, onCheckout }) {
   )
 }
 
-unction POSInterface({ table, menu, cabanas, onUpdateTable, onCloseOrder, onBack }) {
+function POSInterface({ table, menu, cabanas, onUpdateTable, onCloseOrder, onBack }) {
   const [cat, setCat] = useState(null);
   const [search, setSearch] = useState('');
   
