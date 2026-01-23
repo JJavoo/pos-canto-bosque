@@ -131,6 +131,26 @@ export default function App() {
 
   const activeTable = tables.find((t) => t.id === selectedTableId);
 
+  const addMenuItem = async (category, name, price) => {
+  if (!name) return;
+  await addDoc(collection(db, 'menu'), {
+    name,
+    category,
+    price: Number(price),
+    createdAt: serverTimestamp()
+  });
+};
+
+const updateMenuItem = async (docId, data) => {
+  await updateDoc(doc(db, 'menu', docId), data);
+};
+
+const deleteMenuItem = async (docId) => {
+  if (!window.confirm('¿Eliminar producto?')) return;
+  await deleteDoc(doc(db, 'menu', docId));
+};
+
+
   // --- HANDLERS MESAS ---
   const handleCreateTable = async (name) => {
     if (!name) return;
@@ -289,6 +309,8 @@ export default function App() {
           <NavBtn icon={<Coffee size={18} />} label="Mesas" active={view === 'tables' || view === 'pos'} onClick={() => setView('tables')} />
           <NavBtn icon={<Tent size={18} />} label="Cabañas" active={view === 'cabanas'} onClick={() => setView('cabanas')} />
           <NavBtn icon={<Archive size={18} />} label="Historial" active={view === 'history'} onClick={() => setView('history')} />
+          <NavBtn icon={<FileText size={18} />}label="Menú"active={view === 'menu'}onClick={() => setView('menu')}
+/>
         </div>
       </header>
 
@@ -303,6 +325,11 @@ export default function App() {
           <CabinsManager cabanas={cabanas} onUpdate={handleUpdateCabana} onCheckout={handleCheckoutCabana} />
         )}
         {view === 'history' && <HistoryManager history={history} />}
+        )}
+        {view === 'menu' && ( <MenuManager menu={menu} onAdd={addMenuItem} onUpdate={updateMenuItem} onDelete={deleteMenuItem} onBack={() => setView('tables')}
+  />
+)}
+
       </main>
     </div>
   );
@@ -976,6 +1003,131 @@ function HistoryManager({ history }) {
     </div>
   );
 }
+
+function MenuManager({ menu, onAdd, onUpdate, onDelete, onBack }) {
+  const [categoria, setCategoria] = React.useState(null);
+  const [nombre, setNombre] = React.useState('');
+  const [precio, setPrecio] = React.useState('');
+  const [mostrarForm, setMostrarForm] = React.useState(false);
+
+  const categorias = [...new Set(menu.map(m => m.category || 'Sin categoría'))];
+
+  const itemsFiltrados = categoria
+    ? menu.filter(m => (m.category || 'Sin categoría') === categoria)
+    : menu;
+
+  return (
+    <div className="card" style={{ padding: 16, height: '100%' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+        <h2>Gestión de Menú</h2>
+        <button className="btn btn-outline" onClick={onBack}>← Volver</button>
+      </div>
+
+      {/* CATEGORÍAS */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+        <button className="btn btn-outline" onClick={() => setCategoria(null)}>
+          Todas
+        </button>
+        {categorias.map(cat => (
+          <button
+            key={cat}
+            className="btn btn-outline"
+            onClick={() => setCategoria(cat)}
+          >
+            {cat}
+          </button>
+        ))}
+      </div>
+
+      {/* BOTÓN AÑADIR */}
+      <button
+        className="btn btn-primary"
+        onClick={() => setMostrarForm(!mostrarForm)}
+        style={{ marginBottom: 12 }}
+      >
+        {mostrarForm ? 'Cancelar' : 'Añadir producto'}
+      </button>
+
+      {/* FORMULARIO */}
+      {mostrarForm && (
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+          <input
+            className="input-search"
+            placeholder="Nombre"
+            value={nombre}
+            onChange={e => setNombre(e.target.value)}
+          />
+          <input
+            className="input-search"
+            placeholder="Precio"
+            type="number"
+            value={precio}
+            onChange={e => setPrecio(e.target.value)}
+          />
+          <button
+            className="btn btn-primary"
+            onClick={() => {
+              if (!categoria) return alert('Selecciona una categoría');
+              onAdd(categoria, nombre, precio);
+              setNombre('');
+              setPrecio('');
+              setMostrarForm(false);
+            }}
+          >
+            Guardar
+          </button>
+        </div>
+      )}
+
+      {/* LISTA */}
+      <div style={{ overflowY: 'auto', maxHeight: '60vh' }}>
+        {itemsFiltrados.map(item => (
+          <div
+            key={item.docId}
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              borderBottom: '1px solid #ddd',
+              padding: 8
+            }}
+          >
+            <div>
+              <strong>{item.name}</strong>
+              <div style={{ fontSize: 12 }}>
+                {item.category} · ₡{item.price}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button
+                className="btn btn-outline"
+                onClick={() => {
+                  const nuevoNombre = prompt('Nombre', item.name);
+                  const nuevoPrecio = prompt('Precio', item.price);
+                  if (nuevoNombre && nuevoPrecio) {
+                    onUpdate(item.docId, {
+                      name: nuevoNombre,
+                      price: Number(nuevoPrecio),
+                      category: item.category
+                    });
+                  }
+                }}
+              >
+                Editar
+              </button>
+              <button
+                className="btn btn-danger"
+                onClick={() => onDelete(item.docId)}
+              >
+                X
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 
 function NavBtn({ icon, label, active, onClick }) {
   return (
