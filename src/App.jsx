@@ -92,6 +92,13 @@ export default function App() {
   const fileInputRef = useRef(null);
 
   useEffect(() => {
+
+const parseVentaDate = (fecha) => {
+  if (!fecha) return new Date();
+  if (fecha.toDate) return fecha.toDate(); // Firestore Timestamp
+  return new Date(fecha); // ISO string antiguo
+};
+
     // 1. MENU
 const unsubMenu = onSnapshot(
   query(collection(db, 'menu'), orderBy('createdAt', 'asc')),
@@ -251,7 +258,7 @@ const deleteMenuItem = async (docId) => {
         // Guardar Venta
         const newVentaRef = doc(ventasColl);
         transaction.set(newVentaRef, {
-          fecha_hora: new Date().toISOString(),
+          fecha_hora: serverTimestamp(),
           mesaId: tableData.id, 
           mesaNombre: currentTable.name + (isPartial ? ' (Parcial)' : ''),
           items: finalItems, 
@@ -314,7 +321,7 @@ const deleteMenuItem = async (docId) => {
     const monto = parseFloat(cabana.info.monto || 0);
     if(monto > 0) {
       await addDoc(collection(db, 'ventas'), {
-        fecha_hora: new Date().toISOString(),
+        fecha_hora: serverTimestamp(),
         mesaNombre: `ALQUILER - ${cabana.name}`,
         items: [{ name: 'Alquiler Cabaña', price: monto, qty: 1 }],
         subtotal: monto, impuesto_tarjeta: 0, total_final: monto,
