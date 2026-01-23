@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  Utensils, Coffee, Archive, ChevronLeft, Trash2, ArrowLeft, Plus, Search, XCircle
+  Utensils, Coffee, Archive, ChevronLeft, Trash2, ArrowLeft, Plus, Minus, Search, XCircle
 } from 'lucide-react';
 
 import { db } from './firebase';
@@ -327,6 +327,7 @@ function POSInterface({ table, menu, onUpdateTable, onCloseOrder, onBack }) {
   // Agrupar productos
   const grouped = {};
   (table.items || []).forEach(i => {
+    // Usamos ID y Precio como clave para separar si el mismo producto tiene precios distintos
     const key = `${i.id}-${i.price}`;
     if(!grouped[key]) grouped[key] = { ...i, qty: 0, ids: [] };
     grouped[key].qty++;
@@ -334,11 +335,14 @@ function POSInterface({ table, menu, onUpdateTable, onCloseOrder, onBack }) {
   });
   const cartItems = Object.values(grouped);
 
-  // Filtrado
+  // Filtrado del menú
   const filtered = search 
     ? menu.filter(i => i.name.toLowerCase().includes(search.toLowerCase())) 
     : cat ? menu.filter(i => i.category === cat) : [];
 
+  // --- FUNCIONES DE AGREGAR / QUITAR ---
+
+  // Agregar item nuevo desde el menú
   const addItem = (item) => {
     let price = Number(item.price);
     if(price === 0) {
@@ -350,9 +354,29 @@ function POSInterface({ table, menu, onUpdateTable, onCloseOrder, onBack }) {
     onUpdateTable({ ...table, items: [...(table.items || []), newItem] });
   };
 
-  const removeOne = (group) => {
-    const removeId = group.ids[0];
+  // Aumentar cantidad de un item YA existente en la comanda
+  const increaseQty = (groupItem) => {
+    // Creamos una copia limpia usando el precio que YA tiene el item en lista
+    const newItem = { 
+      id: groupItem.id,
+      name: groupItem.name,
+      category: groupItem.category,
+      price: groupItem.price,
+      instanceId: Date.now() + Math.random().toString() 
+    };
+    onUpdateTable({ ...table, items: [...(table.items || []), newItem] });
+  };
+
+  // Disminuir cantidad (quita una instancia)
+  const decreaseQty = (groupItem) => {
+    const removeId = groupItem.ids[0]; // Tomamos el ID de la primera instancia
     onUpdateTable({ ...table, items: table.items.filter(i => i.instanceId !== removeId) });
+  };
+
+  // Eliminar TODA la línea (borra todas las instancias de ese producto)
+  const removeLine = (groupItem) => {
+    // Filtramos para quitar todos los items que estén en la lista de IDs de este grupo
+    onUpdateTable({ ...table, items: table.items.filter(i => !groupItem.ids.includes(i.instanceId)) });
   };
 
   return (
@@ -367,16 +391,42 @@ function POSInterface({ table, menu, onUpdateTable, onCloseOrder, onBack }) {
         <div className="order-items">
           {cartItems.map(item => (
             <div key={`${item.id}-${item.price}`} className="order-item">
-              <div className="flex-center" style={{ gap: '10px' }}>
-                <div className="qty-badge">{item.qty}</div>
-                <div>
-                  <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>{item.name}</div>
-                  <div className="text-muted" style={{ fontSize: '0.8rem' }}>{formatColones(item.price)}</div>
+              <div className="flex-center" style={{ gap: '10px', flex: 1 }}>
+                
+                {/* CONTROL DE CANTIDAD (+ y -) */}
+                <div style={{ display: 'flex', alignItems: 'center', background: '#f1f5f9', borderRadius: '8px', padding: '2px' }}>
+                  <button 
+                    onClick={() => decreaseQty(item)}
+                    style={{ border: 'none', background: 'transparent', padding: '4px 8px', cursor: 'pointer', display: 'flex', color: 'var(--danger)' }}
+                  >
+                    <Minus size={14} />
+                  </button>
+                  
+                  <span style={{ fontWeight: 'bold', minWidth: '20px', textAlign: 'center', fontSize: '0.9rem' }}>
+                    {item.qty}
+                  </span>
+
+                  <button 
+                    onClick={() => increaseQty(item)}
+                    style={{ border: 'none', background: 'transparent', padding: '4px 8px', cursor: 'pointer', display: 'flex', color: 'var(--primary)' }}
+                  >
+                    <Plus size={14} />
+                  </button>
+                </div>
+
+                {/* DETALLE DEL ITEM */}
+                <div style={{ overflow: 'hidden' }}>
+                  <div style={{ fontWeight: 600, fontSize: '0.9rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {item.name}
+                  </div>
+                  <div className="text-muted" style={{ fontSize: '0.8rem' }}>Unit: {formatColones(item.price)}</div>
                 </div>
               </div>
+
+              {/* TOTAL DE LINEA Y ELIMINAR LINEA */}
               <div className="flex-center" style={{ gap: '10px' }}>
                 <span style={{ fontWeight: 'bold', fontSize: '0.9rem' }}>{formatColones(item.price * item.qty)}</span>
-                <button className="btn-icon" style={{ color: 'var(--danger)', width: 28, height: 28 }} onClick={() => removeOne(item)}>
+                <button className="btn-icon" style={{ color: '#94a3b8', width: 28, height: 28 }} onClick={() => removeLine(item)} title="Eliminar línea completa">
                   <Trash2 size={16} />
                 </button>
               </div>
@@ -385,6 +435,7 @@ function POSInterface({ table, menu, onUpdateTable, onCloseOrder, onBack }) {
           {cartItems.length === 0 && <div style={{ textAlign: 'center', color: '#cbd5e1', marginTop: '3rem' }}>Mesa vacía</div>}
         </div>
 
+        {/* RESUMEN Y PAGO (Igual que antes) */}
         <div className="order-summary">
           <div className="payment-selector">
             {['Efectivo', 'SINPE', 'Tarjeta'].map(m => (
@@ -419,7 +470,7 @@ function POSInterface({ table, menu, onUpdateTable, onCloseOrder, onBack }) {
         </div>
       </div>
 
-      {/* PANEL DERECHO: MENÚ */}
+      {/* PANEL DERECHO: MENÚ (Igual que antes) */}
       <div className="card" style={{ padding: '1rem', display: 'flex', flexDirection: 'column', background: '#f8fafc' }}>
         <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
           {cat && !search && (
