@@ -734,20 +734,34 @@ function POSInterface({ table, menu, cabanas, onUpdateTable, onCloseOrder, onBac
 }
 
 function HistoryManager({ history }) {
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  // 1. HELPER: Obtener fecha local en formato YYYY-MM-DD
+  // Esto arregla el problema de que salga "mañana" por la noche
+  const getLocalDate = (d) => {
+    const date = d || new Date();
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
 
-  // FUNCIÓN SEGURA PARA FECHAS FIREBASE/JS
+  // 2. ESTADO: Inicia con la fecha LOCAL de hoy
+  const [selectedDate, setSelectedDate] = useState(getLocalDate(new Date()));
+
+  // 3. HELPER: Convertir Timestamp de Firebase a objeto Date seguro
   const getSafeDate = (date) => {
     if (!date) return new Date();
     if (date.toDate) return date.toDate(); 
     return new Date(date);
   };
 
+  // 4. FILTRO: Compara usando la fecha local
   const filteredHistory = history.filter(h => {
     try {
       const dateObj = getSafeDate(h.fecha_hora);
       if (isNaN(dateObj.getTime())) return false; 
-      const hDate = dateObj.toISOString().split('T')[0];
+      
+      // Convertimos la fecha de la venta a string local (YYYY-MM-DD)
+      const hDate = getLocalDate(dateObj);
       return hDate === selectedDate;
     } catch (e) { return false; }
   });
@@ -831,6 +845,7 @@ function HistoryManager({ history }) {
 
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
           <div style={{position:'relative'}}>
+             {/* Input controlado por la fecha local */}
              <input type="date" className="input-search" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} style={{paddingRight: '10px'}} />
           </div>
           <button className="btn btn-primary" onClick={downloadDailyReport} title="Descargar reporte completo de este día">
