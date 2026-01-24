@@ -371,7 +371,7 @@ const deleteMenuItem = async (docId) => {
           <CabinsManager cabanas={cabanas} onUpdate={handleUpdateCabana} onCheckout={handleCheckoutCabana} />
         )}
         {view === 'history' && <HistoryManager history={history} />}
-        )}
+
         {view === 'menu' && ( <MenuManager menu={menu} onAdd={addMenuItem} onUpdate={updateMenuItem} onDelete={deleteMenuItem} onBack={() => setView('tables')}
   />
 )}
