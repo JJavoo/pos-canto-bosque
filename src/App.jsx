@@ -360,7 +360,7 @@ const deleteMenuItem = async (docId) => {
         </div>
       </header>
 
-      <main className="main-area">
+    <main className="main-area">
         {view === 'tables' && (
           <TablesManager tables={tables} onCreate={handleCreateTable} onOpen={(id) => { setSelectedTableId(id); setView('pos'); }} onDelete={handleDeleteTable} onRename={handleRenameTable} />
         )}
@@ -370,11 +370,13 @@ const deleteMenuItem = async (docId) => {
         {view === 'cabanas' && (
           <CabinsManager cabanas={cabanas} onUpdate={handleUpdateCabana} onCheckout={handleCheckoutCabana} />
         )}
+        {/* CORREGIDO AQUÍ: Se eliminó el ")}" extra que había debajo */}
         {view === 'history' && <HistoryManager history={history} />}
-
+        
         {view === 'menu' && ( <MenuManager menu={menu} onAdd={addMenuItem} onUpdate={updateMenuItem} onDelete={deleteMenuItem} onBack={() => setView('tables')}
-  />
-)}
+          />
+        )}
+      </main>
 
       </main>
     </div>
