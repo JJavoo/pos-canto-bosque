@@ -17,7 +17,7 @@ const LOGO_URL = '';
 const INITIAL_CSV_DATA = `id;nombre;categoria;precio
 1;Ensalada César;Ensaladas;5000
 2;Hamburguesa;Platos Principales;6000
-3;Coca Cola;Refrescos;1500`; // (Resumido para el ejemplo, tu lista completa funcionará igual)
+3;Coca Cola;Refrescos;1500`;
 
 const CATEGORY_ICONS = {
   Ensaladas: '🥗', 'Platos Principales': '🍽️', 'Para Compartir': '🥩', Postres: '🍰',
@@ -41,78 +41,25 @@ const parseCSV = (csv) => {
   }).filter((i) => i.id);
 };
 
-// 2. GENERADOR DE CSV MEJORADO (Tipo Factura)
-const downloadInvoiceCSV = (saleData) => {
-  let csvContent = "data:text/csv;charset=utf-8,";
-  
-  // Encabezado General
-  csvContent += `Empresa,Canto del Bosque\n`;
-  csvContent += `Fecha,${new Date(saleData.fecha_hora).toLocaleString()}\n`;
-  csvContent += `Mesa / Origen,${saleData.mesaNombre}\n`;
-  csvContent += `Metodo de Pago,${saleData.medio_pago}\n`;
-  csvContent += `\n`; // Espacio
-
-  // Encabezado de Items
-  csvContent += `Producto,Cantidad,Precio Unitario,Subtotal\n`;
-
-  // Agrupar items para mostrarlos ordenados
-  const grouped = {};
-  saleData.items.forEach(i => {
-    const key = `${i.name}-${i.price}`;
-    if (!grouped[key]) grouped[key] = { name: i.name, price: i.price, qty: 0 };
-    grouped[key].qty += 1;
-  });
-
-  Object.values(grouped).forEach(item => {
-    csvContent += `"${item.name}",${item.qty},${item.price},${item.price * item.qty}\n`;
-  });
-
-  csvContent += `\n`;
-  csvContent += `,,Subtotal,${saleData.subtotal}\n`;
-  csvContent += `,,Impuesto,${saleData.impuesto_tarjeta}\n`;
-  csvContent += `,,TOTAL FINAL,${saleData.total_final}\n`;
-
-  const encodedUri = encodeURI(csvContent);
-  const link = document.createElement("a");
-  link.setAttribute("href", encodedUri);
-  link.setAttribute("download", `Factura_${saleData.mesaNombre}_${new Date().getTime()}.csv`);
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-};
-
 // --- APP PRINCIPAL ---
 export default function App() {
-  const [view, setView] = useState('tables'); // tables | cabanas | pos | history
+  const [view, setView] = useState('tables'); // tables | cabanas | pos | history | menu
   const [menu, setMenu] = useState([]);
   const [tables, setTables] = useState([]);
   const [history, setHistory] = useState([]);
-  const [cabanas, setCabanas] = useState([]); // Nuevo estado para cabañas
+  const [cabanas, setCabanas] = useState([]); 
   const [selectedTableId, setSelectedTableId] = useState(null);
-  const fileInputRef = useRef(null);
 
   useEffect(() => {
-
-const parseVentaDate = (fecha) => {
-  if (!fecha) return new Date();
-  if (fecha.toDate) return fecha.toDate(); // Firestore Timestamp
-  return new Date(fecha); // ISO string antiguo
-};
-
     // 1. MENU
-const unsubMenu = onSnapshot(
-  query(collection(db, 'menu'), orderBy('createdAt', 'asc')),
-  (snap) => {
-    console.log('🔥 onSnapshot menu - docs:', snap.size);
-    const docs = snap.docs.map(d => ({ docId: d.id, ...d.data() }));
-    console.log('MENU docs:', docs);
-    setMenu(docs);
-  },
-  (err) => {
-    console.error('❌ onSnapshot menu error:', err);
-    alert('Error al escuchar la colección menu: ' + (err.message || err));
-  }
-);
+    const unsubMenu = onSnapshot(
+      query(collection(db, 'menu'), orderBy('createdAt', 'asc')),
+      (snap) => {
+        const docs = snap.docs.map(d => ({ docId: d.id, ...d.data() }));
+        setMenu(docs);
+      },
+      (err) => console.error('❌ onSnapshot menu error:', err)
+    );
 
     // 2. MESAS
     const unsubMesas = onSnapshot(query(collection(db, 'mesas'), orderBy('createdAt', 'asc')), (snap) => {
@@ -125,7 +72,6 @@ const unsubMenu = onSnapshot(
     });
 
     // 4. CABAÑAS (INIT & LISTEN)
-    // Inicializar 7 cabañas si no existen
     const initCabanas = async () => {
       for(let i=1; i<=7; i++) {
         const cabId = `cabana-${i}`;
@@ -147,55 +93,31 @@ const unsubMenu = onSnapshot(
 
   const activeTable = tables.find((t) => t.id === selectedTableId);
 
- const addMenuItem = async (category, name, price) => {
-  try {
-    console.log('➕ addMenuItem', { category, name, price });
-    const ref = await addDoc(collection(db, 'menu'), {
-      name,
-      category,
-      price: Number(price),
-      createdAt: serverTimestamp()
-    });
-    // Guardar el id del documento dentro del documento (útil para queries/orden)
-    await setDoc(doc(db, 'menu', ref.id), { id: ref.id }, { merge: true });
-    console.log('✅ addDoc success id:', ref.id);
-    alert('Producto agregado correctamente');
-  } catch (e) {
-    console.error('❌ addMenuItem error', e);
-    alert('Error al agregar producto: ' + (e.message || e));
-  }
-};
+  // --- CRUD MENU ---
+  const addMenuItem = async (category, name, price) => {
+    try {
+      const ref = await addDoc(collection(db, 'menu'), {
+        name, category, price: Number(price), createdAt: serverTimestamp()
+      });
+      await setDoc(doc(db, 'menu', ref.id), { id: ref.id }, { merge: true });
+      alert('Producto agregado correctamente');
+    } catch (e) { alert('Error: ' + e.message); }
+  };
 
+  const updateMenuItem = async (docId, data) => {
+    try {
+      await setDoc(doc(db, 'menu', docId), { ...data, updatedAt: serverTimestamp() }, { merge: true });
+      alert('Producto actualizado');
+    } catch (e) { alert('Error: ' + e.message); }
+  };
 
-const updateMenuItem = async (docId, data) => {
-  try {
-    console.log('✏️ updateMenuItem', docId, data);
-    const ref = doc(db, 'menu', docId);
-    // Usamos setDoc con merge para evitar sobrescribir accidentalmente otros campos
-    await setDoc(ref, { ...data, updatedAt: serverTimestamp() }, { merge: true });
-    console.log('✅ setDoc(merge) success for', docId);
-    alert('Producto actualizado');
-  } catch (e) {
-    console.error('❌ updateMenuItem error', e);
-    alert('Error al actualizar producto: ' + (e.message || e));
-  }
-};
-
-
-const deleteMenuItem = async (docId) => {
-  try {
+  const deleteMenuItem = async (docId) => {
     if (!window.confirm('¿Eliminar producto?')) return;
-    console.log('🗑️ deleteMenuItem', docId);
-    await deleteDoc(doc(db, 'menu', docId));
-    console.log('✅ deleteDoc success');
-    alert('Producto eliminado');
-  } catch (e) {
-    console.error('❌ deleteMenuItem error', e);
-    alert('Error al eliminar producto: ' + (e.message || e));
-  }
-};
-
-
+    try {
+      await deleteDoc(doc(db, 'menu', docId));
+      alert('Producto eliminado');
+    } catch (e) { alert('Error: ' + e.message); }
+  };
 
   // --- HANDLERS MESAS ---
   const handleCreateTable = async (name) => {
@@ -216,7 +138,6 @@ const deleteMenuItem = async (docId) => {
     });
   };
 
-  // 1. RENOMBRAR MESA
   const handleRenameTable = async (tableId, currentName) => {
     const newName = prompt("Nuevo nombre para la mesa:", currentName);
     if(newName && newName !== currentName) {
@@ -230,9 +151,7 @@ const deleteMenuItem = async (docId) => {
     await deleteDoc(doc(db, 'mesas', table.id));
   };
 
-  // 3. DIVIDIR CUENTA & COBRO PARCIAL
-  // Esta función ahora acepta "itemsToPay" para permitir cobros parciales (Split Bill)
-  // --- EN APP (Sustituir handleCloseOrder) ---
+  // --- COBRO (MESA Y SPLIT) ---
   const handleCloseOrder = async (tableData, itemsToPay = null, paymentMethod = 'Efectivo') => {
     const tableRef = doc(db, 'mesas', tableData.id);
     const ventasColl = collection(db, 'ventas');
@@ -251,7 +170,6 @@ const deleteMenuItem = async (docId) => {
 
         // Calculos
         const subtotal = finalItems.reduce((s, it) => s + (Number(it.price) || 0), 0);
-        // Si es tarjeta, suma 13%
         const impuesto = paymentMethod === 'Tarjeta' ? subtotal * 0.13 : 0;
         const total = subtotal + impuesto;
 
@@ -270,24 +188,18 @@ const deleteMenuItem = async (docId) => {
           tipo: isPartial ? 'Parcial' : 'Completa'
         });
 
-        // --- LÓGICA DE CABAÑAS VINCULADAS ---
-        // Buscamos si hay items que sean cobros de cabaña (usaremos una propiedad 'linkedCabinId')
+        // Actualizar estado pago Cabaña si corresponde
         finalItems.forEach(item => {
             if (item.linkedCabinId) {
                 const cabinRef = doc(db, 'cabanas', item.linkedCabinId);
-                // Actualizamos solo el estado de pago, NO liberamos la cabaña (sigue Ocupada)
-                transaction.update(cabinRef, {
-                    'info.estadoPago': 'Pagado'
-                });
+                transaction.update(cabinRef, { 'info.estadoPago': 'Pagado' });
             }
         });
-        // -------------------------------------
 
-        // Actualizar Mesa (Borrar items o limpiar mesa)
+        // Actualizar Mesa
         if (isPartial) {
           const idsToPay = finalItems.map(i => i.instanceId);
           const remainingItems = allItems.filter(i => !idsToPay.includes(i.instanceId));
-          
           transaction.update(tableRef, {
             items: remainingItems,
             status: remainingItems.length > 0 ? 'occupied' : 'free',
@@ -316,26 +228,8 @@ const deleteMenuItem = async (docId) => {
 
   const handleCheckoutCabana = async (cabana) => {
     if(!window.confirm(`¿Finalizar alquiler de ${cabana.name}?`)) return;
-    
-    // Opcional: Guardar en historial de ventas
-    const monto = parseFloat(cabana.info.monto || 0);
-    if(monto > 0) {
-      await addDoc(collection(db, 'ventas'), {
-        fecha_hora: serverTimestamp(),
-        mesaNombre: `ALQUILER - ${cabana.name}`,
-        items: [{ name: 'Alquiler Cabaña', price: monto, qty: 1 }],
-        subtotal: monto, impuesto_tarjeta: 0, total_final: monto,
-        medio_pago: cabana.info.origen === 'Booking' ? 'Booking' : 'Efectivo/Sinpe',
-        createdAt: serverTimestamp(),
-        tipo: 'Hospedaje'
-      });
-    }
-
     // Resetear cabaña
-    await updateDoc(doc(db, 'cabanas', cabana.docId), {
-      status: 'Libre',
-      info: {}
-    });
+    await updateDoc(doc(db, 'cabanas', cabana.docId), { status: 'Libre', info: {} });
   };
 
   return (
@@ -355,12 +249,11 @@ const deleteMenuItem = async (docId) => {
           <NavBtn icon={<Coffee size={18} />} label="Mesas" active={view === 'tables' || view === 'pos'} onClick={() => setView('tables')} />
           <NavBtn icon={<Tent size={18} />} label="Cabañas" active={view === 'cabanas'} onClick={() => setView('cabanas')} />
           <NavBtn icon={<Archive size={18} />} label="Historial" active={view === 'history'} onClick={() => setView('history')} />
-          <NavBtn icon={<FileText size={18} />}label="Menú"active={view === 'menu'}onClick={() => setView('menu')}
-/>
+          <NavBtn icon={<FileText size={18} />} label="Menú" active={view === 'menu'} onClick={() => setView('menu')} />
         </div>
       </header>
 
-    <main className="main-area">
+      <main className="main-area">
         {view === 'tables' && (
           <TablesManager tables={tables} onCreate={handleCreateTable} onOpen={(id) => { setSelectedTableId(id); setView('pos'); }} onDelete={handleDeleteTable} onRename={handleRenameTable} />
         )}
@@ -370,14 +263,12 @@ const deleteMenuItem = async (docId) => {
         {view === 'cabanas' && (
           <CabinsManager cabanas={cabanas} onUpdate={handleUpdateCabana} onCheckout={handleCheckoutCabana} />
         )}
-        {/* CORREGIDO AQUÍ: Se eliminó el ")}" extra que había debajo */}
+        {/* CORRECCIÓN: Se eliminó el ")}" que causaba el error de sintaxis aquí */}
         {view === 'history' && <HistoryManager history={history} />}
         
-        {view === 'menu' && ( <MenuManager menu={menu} onAdd={addMenuItem} onUpdate={updateMenuItem} onDelete={deleteMenuItem} onBack={() => setView('tables')}
-          />
+        {view === 'menu' && ( 
+          <MenuManager menu={menu} onAdd={addMenuItem} onUpdate={updateMenuItem} onDelete={deleteMenuItem} onBack={() => setView('tables')} />
         )}
-      </main>
-
       </main>
     </div>
   );
@@ -412,7 +303,6 @@ function TablesManager({ tables, onCreate, onOpen, onDelete, onRename }) {
                   </button>
                 )}
               </div>
-              
               <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>{t.status === 'occupied' ? '👨‍👩‍👧‍👦' : '🪑'}</div>
               <div className="cat-name" style={{ fontSize: '1.1rem' }}>{t.name}</div>
               <div className="text-muted" style={{ marginTop: 'auto', fontSize: '0.85rem' }}>
@@ -426,12 +316,10 @@ function TablesManager({ tables, onCreate, onOpen, onDelete, onRename }) {
   );
 }
 
-// 4. MODULO CABAÑAS
-// Sustituye tu componente CabinsManager por este:
 function CabinsManager({ cabanas, onUpdate, onCheckout }) {
   const [editingId, setEditingId] = useState(null);
   const [tempData, setTempData] = useState({});
-  const [payingCabin, setPayingCabin] = useState(null); // Para el modal de cobro
+  const [payingCabin, setPayingCabin] = useState(null);
 
   const startEdit = (c) => {
     setEditingId(c.docId);
@@ -441,7 +329,7 @@ function CabinsManager({ cabanas, onUpdate, onCheckout }) {
   const saveEdit = (docId) => {
     onUpdate(docId, { 
       info: tempData,
-      status: 'Ocupada' // Aseguramos que siga ocupada al editar
+      status: 'Ocupada' 
     });
     setEditingId(null);
   };
@@ -450,7 +338,6 @@ function CabinsManager({ cabanas, onUpdate, onCheckout }) {
     setTempData(prev => ({ ...prev, [field]: val }));
   };
 
-  // --- LÓGICA DE PAGO DIRECTO DE CABAÑA ---
   const handlePayCabin = async (method) => {
     if(!payingCabin) return;
     const montoBase = parseFloat(payingCabin.info.monto || 0);
@@ -459,9 +346,8 @@ function CabinsManager({ cabanas, onUpdate, onCheckout }) {
 
     if(!window.confirm(`¿Confirmar cobro de ${formatColones(total)} (${method}) para ${payingCabin.name}?`)) return;
 
-    // 1. Crear Factura
     await addDoc(collection(db, 'ventas'), {
-        fecha_hora: new Date().toISOString(),
+        fecha_hora: serverTimestamp(),
         mesaNombre: `HOSPEDAJE - ${payingCabin.name}`,
         items: [{ name: `Alquiler ${payingCabin.name}`, price: montoBase, qty: 1 }],
         subtotal: montoBase,
@@ -472,11 +358,7 @@ function CabinsManager({ cabanas, onUpdate, onCheckout }) {
         tipo: 'Hospedaje'
     });
 
-    // 2. Actualizar cabaña (Solo estadoPago, sigue Ocupada)
-    await onUpdate(payingCabin.docId, {
-        'info.estadoPago': 'Pagado'
-    });
-
+    await onUpdate(payingCabin.docId, { 'info.estadoPago': 'Pagado' });
     setPayingCabin(null);
     alert("Cobro registrado exitosamente. La cabaña sigue OCUPADA.");
   };
@@ -485,22 +367,15 @@ function CabinsManager({ cabanas, onUpdate, onCheckout }) {
     <div className="card" style={{ padding: '1.5rem', height: '100%', overflowY: 'auto', background: '#f8fafc' }}>
        <h2 style={{ fontSize: '1.2rem', fontWeight: '800', marginBottom: '1.5rem' }}>Gestión de Cabañas</h2>
        
-       {/* MODAL DE PAGO (Simple Overlay) */}
        {payingCabin && (
            <div style={{position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.5)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:100}}>
                <div className="card" style={{padding:'2rem', width:'300px', textAlign:'center'}}>
                    <h3>Cobrar {payingCabin.name}</h3>
                    <p className="text-muted">Monto Base: {formatColones(payingCabin.info.monto)}</p>
                    <div style={{display:'grid', gap:'10px', marginTop:'1rem'}}>
-                       <button className="btn btn-primary" onClick={() => handlePayCabin('Efectivo')}>
-                           💵 Efectivo (Sin IVA)
-                       </button>
-                       <button className="btn btn-primary" onClick={() => handlePayCabin('Tarjeta')}>
-                           💳 Tarjeta (+13% IVA)
-                       </button>
-                       <button className="btn btn-outline" onClick={() => setPayingCabin(null)} style={{marginTop:'10px'}}>
-                           Cancelar
-                       </button>
+                       <button className="btn btn-primary" onClick={() => handlePayCabin('Efectivo')}>💵 Efectivo (Sin IVA)</button>
+                       <button className="btn btn-primary" onClick={() => handlePayCabin('Tarjeta')}>💳 Tarjeta (+13% IVA)</button>
+                       <button className="btn btn-outline" onClick={() => setPayingCabin(null)} style={{marginTop:'10px'}}>Cancelar</button>
                    </div>
                </div>
            </div>
@@ -532,7 +407,6 @@ function CabinsManager({ cabanas, onUpdate, onCheckout }) {
                       <input type="date" className="input-search" value={tempData.salida || ''} onChange={e => handleChange('salida', e.target.value)} />
                     </div>
                     <input type="number" className="input-search" placeholder="Monto Total" value={tempData.monto || ''} onChange={e => handleChange('monto', e.target.value)} />
-                    {/* Quitamos el select manual de pago porque ahora lo hacemos con botón, aunque puedes dejarlo si quieres corregir a mano */}
                     <div style={{display:'flex', gap:'5px', marginTop:'5px'}}>
                       <button className="btn btn-primary" onClick={() => saveEdit(c.docId)} style={{flex:1}}><Save size={16}/> Guardar</button>
                       <button className="btn btn-outline" onClick={() => setEditingId(null)} style={{flex:1}}>Cancelar</button>
@@ -549,21 +423,11 @@ function CabinsManager({ cabanas, onUpdate, onCheckout }) {
                              ({isPaid ? 'PAGADO' : 'PENDIENTE'})
                           </span>
                         </div>
-                        
                         <div style={{display:'grid', gridTemplateColumns: '1fr 1fr', gap:'5px', marginTop:'1rem'}}>
-                           {/* Botón Editar */}
                            <button className="btn btn-outline" onClick={() => startEdit(c)}><Edit size={14}/> Editar</button>
-                           
-                           {/* Botón Check Out (Solo libera) */}
                            <button className="btn btn-primary" style={{background: '#334155', borderColor:'#334155'}} onClick={() => onCheckout(c)}>Check Out</button>
-
-                           {/* Botón COBRAR (Solo si está pendiente) */}
                            {!isPaid && (
-                               <button 
-                                className="btn btn-primary" 
-                                style={{gridColumn: 'span 2', justifyContent:'center', marginTop:'5px', background:'#22c55e', borderColor:'#22c55e'}}
-                                onClick={() => setPayingCabin(c)}
-                               >
+                               <button className="btn btn-primary" style={{gridColumn: 'span 2', justifyContent:'center', marginTop:'5px', background:'#22c55e', borderColor:'#22c55e'}} onClick={() => setPayingCabin(c)}>
                                    💸 Cobrar Ahora
                                </button>
                            )}
@@ -588,17 +452,12 @@ function CabinsManager({ cabanas, onUpdate, onCheckout }) {
 function POSInterface({ table, menu, cabanas, onUpdateTable, onCloseOrder, onBack }) {
   const [cat, setCat] = useState(null);
   const [search, setSearch] = useState('');
-  
-  // --- NUEVO ESTADO PARA CABAÑAS ---
   const [showCabinSelector, setShowCabinSelector] = useState(false); 
-
-  // ESTADOS PARA DIVIDIR CUENTA
   const [isSplitMode, setIsSplitMode] = useState(false);
   const [selectedForSplit, setSelectedForSplit] = useState([]); 
 
   const categories = [...new Set(menu.map(i => i.category))];
   
-  // Agrupar productos para visualización
   const grouped = {};
   (table.items || []).forEach(i => {
     const key = `${i.id}-${i.price}`;
@@ -608,7 +467,6 @@ function POSInterface({ table, menu, cabanas, onUpdateTable, onCloseOrder, onBac
   });
   const cartItems = Object.values(grouped);
 
-  // Totales
   const itemsToCalc = isSplitMode 
     ? (table.items || []).filter(i => selectedForSplit.includes(i.instanceId))
     : (table.items || []);
@@ -621,30 +479,23 @@ function POSInterface({ table, menu, cabanas, onUpdateTable, onCloseOrder, onBac
     ? menu.filter(i => i.name.toLowerCase().includes(search.toLowerCase())) 
     : cat ? menu.filter(i => i.category === cat) : [];
 
-  // --- NUEVA LÓGICA PARA CABAÑAS ---
   const handleAddCabinToOrder = (cabin) => {
       const amount = parseFloat(cabin.info.monto || 0);
-      
-      // Creamos un item especial que incluye el ID de la cabaña
       const newItem = { 
-          id: `cabin-${cabin.docId}`, // ID ficticio
+          id: `cabin-${cabin.docId}`,
           name: `Hospedaje: ${cabin.name} (${cabin.info.uesped})`, 
           category: 'Hospedaje', 
           price: amount,
           qty: 1,
           instanceId: Date.now().toString(),
-          linkedCabinId: cabin.docId // <--- IMPORTANTE: Esto le dice a App que actualice la cabaña al cobrar
+          linkedCabinId: cabin.docId 
       };
-
       onUpdateTable({ ...table, items: [...(table.items || []), newItem] });
       setShowCabinSelector(false);
   };
 
-  // Filtramos cabañas que tienen deuda pendiente
   const pendingCabins = (cabanas || []).filter(c => c.status === 'Ocupada' && c.info?.estadoPago !== 'Pagado');
 
-
-  // --- ACTIONS ---
   const addItem = (item) => {
     if(isSplitMode) return alert("Sal del modo Dividir para agregar items");
     let price = Number(item.price);
@@ -674,7 +525,6 @@ function POSInterface({ table, menu, cabanas, onUpdateTable, onCloseOrder, onBac
     onUpdateTable({ ...table, items: table.items.filter(i => !groupItem.ids.includes(i.instanceId)) });
   };
 
-  // --- SPLIT LOGIC ---
   const toggleSplitSelection = (instanceId) => {
     if(selectedForSplit.includes(instanceId)) {
       setSelectedForSplit(prev => prev.filter(id => id !== instanceId));
@@ -816,7 +666,6 @@ function POSInterface({ table, menu, cabanas, onUpdateTable, onCloseOrder, onBac
       {/* RIGHT: MENU */}
       <div className="card" style={{ padding: '1rem', display: 'flex', flexDirection: 'column', background: '#f8fafc', opacity: isSplitMode ? 0.5 : 1, pointerEvents: isSplitMode ? 'none' : 'auto' }}>
         
-        {/* --- INICIO: CABIN SELECTOR MODAL --- */}
         {showCabinSelector && (
              <div style={{position:'absolute', top:0, left:0, right:0, bottom:0, background:'white', zIndex:50, padding:'1rem', overflowY:'auto', borderRadius:'8px'}}>
                   <div style={{display:'flex', justifyContent:'space-between', marginBottom:'1rem'}}>
@@ -838,11 +687,8 @@ function POSInterface({ table, menu, cabanas, onUpdateTable, onCloseOrder, onBac
                   )}
              </div>
         )}
-        {/* --- FIN: CABIN SELECTOR MODAL --- */}
 
         <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
-          
-          {/* --- BOTÓN NUEVO PARA CABAÑAS --- */}
           <button 
              className="btn btn-outline" 
              title="Cargar Cabaña"
@@ -886,20 +732,28 @@ function POSInterface({ table, menu, cabanas, onUpdateTable, onCloseOrder, onBac
     </div>
   );
 }
+
 function HistoryManager({ history }) {
-  // Estado para la fecha seleccionada (por defecto hoy)
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
 
-  // Filtrar historial según la fecha seleccionada
+  // FUNCIÓN SEGURA PARA FECHAS FIREBASE/JS
+  const getSafeDate = (date) => {
+    if (!date) return new Date();
+    if (date.toDate) return date.toDate(); 
+    return new Date(date);
+  };
+
   const filteredHistory = history.filter(h => {
-    const hDate = new Date(h.fecha_hora).toISOString().split('T')[0];
-    return hDate === selectedDate;
+    try {
+      const dateObj = getSafeDate(h.fecha_hora);
+      if (isNaN(dateObj.getTime())) return false; 
+      const hDate = dateObj.toISOString().split('T')[0];
+      return hDate === selectedDate;
+    } catch (e) { return false; }
   });
 
-  // Calcular total del día seleccionado
   const dayTotal = filteredHistory.reduce((sum, item) => sum + (Number(item.total_final) || 0), 0);
 
-  // Lógica para descargar EL REPORTE DEL DÍA (Todas las facturas en un archivo)
   const downloadDailyReport = () => {
     if (filteredHistory.length === 0) return alert("No hay ventas en la fecha seleccionada.");
 
@@ -910,21 +764,17 @@ function HistoryManager({ history }) {
     csv += `MONTO TOTAL DEL DIA,${dayTotal}\n\n`;
     csv += "========================================\n\n";
 
-    // Recorremos cada venta y la agregamos al CSV
     filteredHistory.forEach((sale, index) => {
-      const time = new Date(sale.fecha_hora).toLocaleTimeString();
-      
+      const time = getSafeDate(sale.fecha_hora).toLocaleTimeString();
       csv += `VENTA #${index + 1} | Hora: ${time} | ${sale.mesaNombre}\n`;
       csv += `Metodo Pago: ${sale.medio_pago}\n`;
       csv += `Producto,Cantidad,Precio Unit,Subtotal\n`;
 
-      // Items de esa venta
-      // Re-agrupar items para que se vea ordenado (igual que en la factura individual)
       const grouped = {};
       (sale.items || []).forEach(i => {
         const key = `${i.name}-${i.price}`;
         if (!grouped[key]) grouped[key] = { name: i.name, price: i.price, qty: 0 };
-        grouped[key].qty += (i.qty || 1); // Si viene de split puede tener qty, si no, es 1
+        grouped[key].qty += (i.qty || 1); 
       });
 
       Object.values(grouped).forEach(item => {
@@ -935,7 +785,6 @@ function HistoryManager({ history }) {
       csv += "----------------------------------------\n";
     });
 
-    // Crear y descargar el archivo
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement("a");
     const url = URL.createObjectURL(blob);
@@ -946,10 +795,9 @@ function HistoryManager({ history }) {
     document.body.removeChild(link);
   };
 
-  // Lógica para descargar factura individual (la que ya tenías, movida aquí adentro o importada)
   const downloadSingleInvoice = (saleData) => {
     let csvContent = "data:text/csv;charset=utf-8,";
-    csvContent += `Empresa,Canto del Bosque\nFecha,${new Date(saleData.fecha_hora).toLocaleString()}\nMesa,${saleData.mesaNombre}\nPago,${saleData.medio_pago}\n\nProducto,Cantidad,Precio,Subtotal\n`;
+    csvContent += `Empresa,Canto del Bosque\nFecha,${getSafeDate(saleData.fecha_hora).toLocaleString()}\nMesa,${saleData.mesaNombre}\nPago,${saleData.medio_pago}\n\nProducto,Cantidad,Precio,Subtotal\n`;
     
     const grouped = {};
     saleData.items.forEach(i => {
@@ -966,14 +814,13 @@ function HistoryManager({ history }) {
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.href = encodedUri;
-    link.download = `Factura_${saleData.mesaNombre}_${new Date(saleData.fecha_hora).getTime()}.csv`;
+    link.download = `Factura_${saleData.mesaNombre}_${getSafeDate(saleData.fecha_hora).getTime()}.csv`;
     link.click();
   };
 
   return (
     <div className="card" style={{ padding: '1rem', height: '100%', display: 'flex', flexDirection: 'column' }}>
       
-      {/* CABECERA CON CONTROLES */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '10px' }}>
         <div>
            <h2 style={{fontSize:'1.2rem', fontWeight:'800', margin:0}}>Historial de Ventas</h2>
@@ -983,25 +830,15 @@ function HistoryManager({ history }) {
         </div>
 
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-          {/* SELECTOR DE FECHA */}
           <div style={{position:'relative'}}>
-             <input 
-               type="date" 
-               className="input-search" 
-               value={selectedDate} 
-               onChange={(e) => setSelectedDate(e.target.value)}
-               style={{paddingRight: '10px'}}
-             />
+             <input type="date" className="input-search" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} style={{paddingRight: '10px'}} />
           </div>
-
-          {/* BOTÓN DESCARGAR DIA COMPLETO */}
           <button className="btn btn-primary" onClick={downloadDailyReport} title="Descargar reporte completo de este día">
             <Archive size={18} /> Descargar Día
           </button>
         </div>
       </div>
       
-      {/* TABLA DE VENTAS FILTRADA */}
       <div className="table-responsive" style={{ flex: 1, border: '1px solid var(--border)', borderRadius: '8px' }}>
         <table className="history-table">
           <thead>
@@ -1024,7 +861,7 @@ function HistoryManager({ history }) {
               filteredHistory.map(h => (
                 <tr key={h.id}>
                   <td>
-                    {new Date(h.fecha_hora).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                    {getSafeDate(h.fecha_hora).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
                   </td>
                   <td>
                     <div style={{fontWeight:'bold'}}>{h.mesaNombre}</div>
@@ -1033,7 +870,6 @@ function HistoryManager({ history }) {
                     </div>
                   </td>
                   <td style={{fontSize:'0.85rem', maxWidth:'200px', color:'var(--text-muted)'}}>
-                     {/* Mostramos resumen breve de items */}
                      {(h.items || []).length} items
                   </td>
                   <td style={{ fontWeight: 'bold' }}>{formatColones(h.total_final)}</td>
@@ -1071,116 +907,53 @@ function MenuManager({ menu, onAdd, onUpdate, onDelete, onBack }) {
         <button className="btn btn-outline" onClick={onBack}>← Volver</button>
       </div>
 
-      {/* CATEGORÍAS */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-        <button className="btn btn-outline" onClick={() => setCategoria(null)}>
-          Todas
-        </button>
+        <button className="btn btn-outline" onClick={() => setCategoria(null)}>Todas</button>
         {categorias.map(cat => (
-          <button
-            key={cat}
-            className="btn btn-outline"
-            onClick={() => setCategoria(cat)}
-          >
-            {cat}
-          </button>
+          <button key={cat} className="btn btn-outline" onClick={() => setCategoria(cat)}>{cat}</button>
         ))}
       </div>
 
-      {/* BOTÓN AÑADIR */}
-      <button
-        className="btn btn-primary"
-        onClick={() => setMostrarForm(!mostrarForm)}
-        style={{ marginBottom: 12 }}
-      >
+      <button className="btn btn-primary" onClick={() => setMostrarForm(!mostrarForm)} style={{ marginBottom: 12 }}>
         {mostrarForm ? 'Cancelar' : 'Añadir producto'}
       </button>
 
-      {/* FORMULARIO */}
       {mostrarForm && (
         <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-          <input
-            className="input-search"
-            placeholder="Nombre"
-            value={nombre}
-            onChange={e => setNombre(e.target.value)}
-          />
-          <input
-            className="input-search"
-            placeholder="Precio"
-            type="number"
-            value={precio}
-            onChange={e => setPrecio(e.target.value)}
-          />
-          <button
-            className="btn btn-primary"
-            onClick={() => {
+          <input className="input-search" placeholder="Nombre" value={nombre} onChange={e => setNombre(e.target.value)} />
+          <input className="input-search" placeholder="Precio" type="number" value={precio} onChange={e => setPrecio(e.target.value)} />
+          <button className="btn btn-primary" onClick={() => {
               if (!categoria) return alert('Selecciona una categoría');
               onAdd(categoria, nombre, precio);
-              setNombre('');
-              setPrecio('');
-              setMostrarForm(false);
-            }}
-          >
+              setNombre(''); setPrecio(''); setMostrarForm(false);
+            }}>
             Guardar
           </button>
         </div>
       )}
 
-      {/* LISTA */}
       <div style={{ overflowY: 'auto', maxHeight: '60vh' }}>
         {itemsFiltrados.map(item => (
-          <div
-            key={item.docId}
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              borderBottom: '1px solid #ddd',
-              padding: 8
-            }}
-          >
+          <div key={item.docId} style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #ddd', padding: 8 }}>
             <div>
               <strong>{item.name}</strong>
-              <div style={{ fontSize: 12 }}>
-                {item.category} · ₡{item.price}
-              </div>
+              <div style={{ fontSize: 12 }}>{item.category} · ₡{item.price}</div>
             </div>
             <div style={{ display: 'flex', gap: 6 }}>
-<button
-  className="btn btn-outline"
-  onClick={async () => {
-    try {
-      const nuevoNombre = prompt('Nombre', item.name);
-      if (nuevoNombre === null) return; // cancel
-      const nuevoPrecioRaw = prompt('Precio', item.price);
-      if (nuevoPrecioRaw === null) return; // cancel
-
-      const nuevoPrecio = Number(nuevoPrecioRaw);
-      if (nuevoNombre.trim() === '' || Number.isNaN(nuevoPrecio)) {
-        return alert('Nombre vacío o precio inválido.');
-      }
-
-      // Mantener la categoría existente (si quieres permitir editarla, añade otro prompt/select)
-      await onUpdate(item.docId, {
-        name: nuevoNombre.trim(),
-        price: nuevoPrecio,
-        category: item.category
-      });
-    } catch (err) {
-      console.error('Error al editar item (UI):', err);
-      alert('Error al editar: ' + (err.message || err));
-    }
-  }}
->
-  Editar
-</button>
-
-              <button
-                className="btn btn-danger"
-                onClick={() => onDelete(item.docId)}
-              >
-                X
+              <button className="btn btn-outline" onClick={async () => {
+                  try {
+                    const nuevoNombre = prompt('Nombre', item.name);
+                    if (nuevoNombre === null) return; 
+                    const nuevoPrecioRaw = prompt('Precio', item.price);
+                    if (nuevoPrecioRaw === null) return;
+                    const nuevoPrecio = Number(nuevoPrecioRaw);
+                    if (nuevoNombre.trim() === '' || Number.isNaN(nuevoPrecio)) return alert('Datos inválidos');
+                    await onUpdate(item.docId, { name: nuevoNombre.trim(), price: nuevoPrecio, category: item.category });
+                  } catch (err) { alert('Error: ' + err.message); }
+                }}>
+                Editar
               </button>
+              <button className="btn btn-danger" onClick={() => onDelete(item.docId)}>X</button>
             </div>
           </div>
         ))}
@@ -1188,7 +961,6 @@ function MenuManager({ menu, onAdd, onUpdate, onDelete, onBack }) {
     </div>
   );
 }
-
 
 function NavBtn({ icon, label, active, onClick }) {
   return (
@@ -1202,4 +974,3 @@ function NavBtn({ icon, label, active, onClick }) {
     </button>
   );
 }
-
