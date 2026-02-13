@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Utensils, Coffee, Archive, ChevronLeft, Trash2, ArrowLeft, Plus, Minus, 
-  Search, XCircle, Tent, Edit, Users, FileText, CheckCircle, Save
+  Search, XCircle, Tent, Edit, Users, FileText, CheckCircle, Save, Printer
 } from 'lucide-react';
 
 import { db } from './firebase';
@@ -14,10 +14,6 @@ import './App.css';
 
 // --- CONFIGURACIÓN & UTILIDADES ---
 const LOGO_URL = ''; 
-const INITIAL_CSV_DATA = `id;nombre;categoria;precio
-1;Ensalada César;Ensaladas;5000
-2;Hamburguesa;Platos Principales;6000
-3;Coca Cola;Refrescos;1500`;
 
 const CATEGORY_ICONS = {
   Ensaladas: '🥗', 'Platos Principales': '🍽️', 'Para Compartir': '🥩', Postres: '🍰',
@@ -33,14 +29,6 @@ const formatColones = (val) => {
   }).format(n);
 };
 
-const parseCSV = (csv) => {
-  const lines = csv.trim().split('\n');
-  return lines.slice(1).map((line) => {
-    const [id, name, cat, price] = line.split(';');
-    return { id, name: name?.trim(), category: cat?.trim(), price: parseFloat(price?.trim()) || 0 };
-  }).filter((i) => i.id);
-};
-
 // --- APP PRINCIPAL ---
 export default function App() {
   const [view, setView] = useState('tables'); // tables | cabanas | pos | history | menu
@@ -49,17 +37,16 @@ export default function App() {
   const [history, setHistory] = useState([]);
   const [cabanas, setCabanas] = useState([]); 
   const [selectedTableId, setSelectedTableId] = useState(null);
+  
+  // Estado para impresión
+  const [ticketData, setTicketData] = useState(null);
 
   useEffect(() => {
     // 1. MENU
-    const unsubMenu = onSnapshot(
-      query(collection(db, 'menu'), orderBy('createdAt', 'asc')),
-      (snap) => {
+    const unsubMenu = onSnapshot(query(collection(db, 'menu'), orderBy('createdAt', 'asc')), (snap) => {
         const docs = snap.docs.map(d => ({ docId: d.id, ...d.data() }));
         setMenu(docs);
-      },
-      (err) => console.error('❌ onSnapshot menu error:', err)
-    );
+      });
 
     // 2. MESAS
     const unsubMesas = onSnapshot(query(collection(db, 'mesas'), orderBy('createdAt', 'asc')), (snap) => {
@@ -71,7 +58,7 @@ export default function App() {
        setHistory(snap.docs.slice(0, 50).map(d => ({id: d.id, ...d.data()})));
     });
 
-    // 4. CABAÑAS (INIT & LISTEN)
+    // 4. CABAÑAS
     const initCabanas = async () => {
       for(let i=1; i<=7; i++) {
         const cabId = `cabana-${i}`;
@@ -92,6 +79,14 @@ export default function App() {
   }, []);
 
   const activeTable = tables.find((t) => t.id === selectedTableId);
+
+  // --- FUNCION IMPRIMIR ---
+  const handlePrint = (data) => {
+    setTicketData(data);
+    setTimeout(() => {
+        window.print();
+    }, 300);
+  };
 
   // --- CRUD MENU ---
   const addMenuItem = async (category, name, price) => {
@@ -161,6 +156,24 @@ export default function App() {
     if(finalItems.length === 0) return alert("No hay items para cobrar");
 
     try {
+      // Preparamos datos para guardar e imprimir
+      const subtotal = finalItems.reduce((s, it) => s + (Number(it.price) || 0), 0);
+      const impuesto = paymentMethod === 'Tarjeta' ? subtotal * 0.13 : 0;
+      const total = subtotal + impuesto;
+      
+      const ventaData = {
+        fecha_hora: serverTimestamp(),
+        mesaId: tableData.id, 
+        mesaNombre: tableData.name + (isPartial ? ' (Parcial)' : ''),
+        items: finalItems, 
+        subtotal, 
+        impuesto_tarjeta: impuesto,
+        total_final: total, 
+        medio_pago: paymentMethod,
+        createdAt: serverTimestamp(),
+        tipo: isPartial ? 'Parcial' : 'Completa'
+      };
+
       await runTransaction(db, async (transaction) => {
         const tSnap = await transaction.get(tableRef);
         if (!tSnap.exists()) throw new Error('Mesa no existe');
@@ -168,25 +181,8 @@ export default function App() {
         const currentTable = tSnap.data();
         const allItems = currentTable.items || [];
 
-        // Calculos
-        const subtotal = finalItems.reduce((s, it) => s + (Number(it.price) || 0), 0);
-        const impuesto = paymentMethod === 'Tarjeta' ? subtotal * 0.13 : 0;
-        const total = subtotal + impuesto;
-
-        // Guardar Venta
         const newVentaRef = doc(ventasColl);
-        transaction.set(newVentaRef, {
-          fecha_hora: serverTimestamp(),
-          mesaId: tableData.id, 
-          mesaNombre: currentTable.name + (isPartial ? ' (Parcial)' : ''),
-          items: finalItems, 
-          subtotal, 
-          impuesto_tarjeta: impuesto,
-          total_final: total, 
-          medio_pago: paymentMethod,
-          createdAt: serverTimestamp(),
-          tipo: isPartial ? 'Parcial' : 'Completa'
-        });
+        transaction.set(newVentaRef, ventaData);
 
         // Actualizar estado pago Cabaña si corresponde
         finalItems.forEach(item => {
@@ -212,6 +208,9 @@ export default function App() {
         }
       });
       
+      // Imprimir Ticket Automáticamente (Usamos new Date porque serverTimestamp es asíncrono)
+      handlePrint({ ...ventaData, fecha_hora: new Date(), id: 'NUEVA' });
+
       if(!isPartial) {
         setView('tables'); 
         setSelectedTableId(null);
@@ -228,9 +227,11 @@ export default function App() {
 
   const handleCheckoutCabana = async (cabana) => {
     if(!window.confirm(`¿Finalizar alquiler de ${cabana.name}?`)) return;
-    // Resetear cabaña
     await updateDoc(doc(db, 'cabanas', cabana.docId), { status: 'Libre', info: {} });
   };
+
+  // Pasar funcion de imprimir a cabañas también
+  const onPrintCabana = (venta) => handlePrint(venta);
 
   return (
     <div className="app-container">
@@ -240,7 +241,7 @@ export default function App() {
           <div>
             <h1 style={{ fontSize: '1.1rem', margin: 0, color: 'var(--primary)', fontWeight: 800 }}>Canto del Bosque</h1>
             <div className="flex-center" style={{ gap: '6px', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-              <span style={{ width: 8, height: 8, background: '#22c55e', borderRadius: '50%' }}></span> Sistema POS v2.0
+              <span style={{ width: 8, height: 8, background: '#22c55e', borderRadius: '50%' }}></span> Sistema POS v2.1
             </div>
           </div>
         </div>
@@ -261,20 +262,96 @@ export default function App() {
           <POSInterface table={activeTable} menu={menu} cabanas={cabanas} onUpdateTable={handleUpdateTable} onCloseOrder={handleCloseOrder} onBack={() => setView('tables')} />
         )}
         {view === 'cabanas' && (
-          <CabinsManager cabanas={cabanas} onUpdate={handleUpdateCabana} onCheckout={handleCheckoutCabana} />
+          <CabinsManager cabanas={cabanas} onUpdate={handleUpdateCabana} onCheckout={handleCheckoutCabana} onPrint={onPrintCabana} />
         )}
-        {/* CORRECCIÓN: Se eliminó el ")}" que causaba el error de sintaxis aquí */}
-        {view === 'history' && <HistoryManager history={history} />}
+        {view === 'history' && <HistoryManager history={history} onPrint={handlePrint} />}
         
         {view === 'menu' && ( 
           <MenuManager menu={menu} onAdd={addMenuItem} onUpdate={updateMenuItem} onDelete={deleteMenuItem} onBack={() => setView('tables')} />
         )}
       </main>
+      
+      {/* COMPONENTE DE TICKET (OCULTO EN PANTALLA, VISIBLE AL IMPRIMIR) */}
+      <PrintableTicket data={ticketData} />
     </div>
   );
 }
 
 // --- COMPONENTES ---
+
+function PrintableTicket({ data }) {
+  if (!data) return null;
+
+  const { mesaNombre, fecha_hora, items, subtotal, impuesto_tarjeta, total_final, medio_pago, id } = data;
+  
+  // Manejo seguro de fechas (Firebase timestamp vs JS Date)
+  const dateObj = fecha_hora?.toDate ? fecha_hora.toDate() : new Date(fecha_hora || Date.now());
+  const fechaStr = dateObj.toLocaleDateString('es-CR');
+  const horaStr = dateObj.toLocaleTimeString('es-CR', { hour: '2-digit', minute: '2-digit' });
+
+  return (
+    <div id="printable-receipt">
+      <div className="ticket-header">
+        <h2 style={{ margin: 0, fontSize: '16px' }}>Canto del Bosque</h2>
+        <div>Tel: 8633-9009</div>
+        <div>Costa Rica</div>
+      </div>
+      
+      <div className="ticket-divider"></div>
+      
+      <div style={{display:'flex', justifyContent:'space-between'}}>
+         <span>Fecha: {fechaStr}</span>
+         <span>Hora: {horaStr}</span>
+      </div>
+      <div>Cliente: {mesaNombre}</div>
+      <div>Factura #: {id ? id.slice(-6).toUpperCase() : '---'}</div>
+      
+      <div className="ticket-divider"></div>
+
+      <div className="ticket-row" style={{ fontWeight: 'bold' }}>
+        <span style={{flex: 1}}>Cant. Desc</span>
+        <span>Total</span>
+      </div>
+
+      {items.map((item, idx) => (
+        <div key={idx} style={{ marginBottom: '4px' }}>
+          <div>{item.name}</div>
+          <div className="ticket-row">
+            <span>{item.qty || 1} x {formatColones(item.price)}</span>
+            <span>{formatColones((item.price * (item.qty || 1)))}</span>
+          </div>
+        </div>
+      ))}
+
+      <div className="ticket-divider"></div>
+
+      <div className="ticket-row">
+        <span>Subtotal:</span>
+        <span>{formatColones(subtotal)}</span>
+      </div>
+      
+      {impuesto_tarjeta > 0 && (
+        <div className="ticket-row">
+          <span>IVA (13%):</span>
+          <span>{formatColones(impuesto_tarjeta)}</span>
+        </div>
+      )}
+
+      <div className="ticket-row" style={{ fontSize: '16px', fontWeight: 'bold', marginTop: '5px' }}>
+        <span>TOTAL:</span>
+        <span>{formatColones(total_final)}</span>
+      </div>
+      
+      <div style={{textAlign:'right', fontSize:'11px', marginTop:'5px'}}>
+        Pago: {medio_pago}
+      </div>
+
+      <div className="ticket-footer">
+        <p>¡Gracias por su visita!</p>
+      </div>
+    </div>
+  );
+}
 
 function TablesManager({ tables, onCreate, onOpen, onDelete, onRename }) {
   const [name, setName] = useState('');
@@ -316,7 +393,7 @@ function TablesManager({ tables, onCreate, onOpen, onDelete, onRename }) {
   );
 }
 
-function CabinsManager({ cabanas, onUpdate, onCheckout }) {
+function CabinsManager({ cabanas, onUpdate, onCheckout, onPrint }) {
   const [editingId, setEditingId] = useState(null);
   const [tempData, setTempData] = useState({});
   const [payingCabin, setPayingCabin] = useState(null);
@@ -346,7 +423,7 @@ function CabinsManager({ cabanas, onUpdate, onCheckout }) {
 
     if(!window.confirm(`¿Confirmar cobro de ${formatColones(total)} (${method}) para ${payingCabin.name}?`)) return;
 
-    await addDoc(collection(db, 'ventas'), {
+    const ventaData = {
         fecha_hora: serverTimestamp(),
         mesaNombre: `HOSPEDAJE - ${payingCabin.name}`,
         items: [{ name: `Alquiler ${payingCabin.name}`, price: montoBase, qty: 1 }],
@@ -356,11 +433,16 @@ function CabinsManager({ cabanas, onUpdate, onCheckout }) {
         medio_pago: method,
         createdAt: serverTimestamp(),
         tipo: 'Hospedaje'
-    });
+    };
 
+    await addDoc(collection(db, 'ventas'), ventaData);
     await onUpdate(payingCabin.docId, { 'info.estadoPago': 'Pagado' });
+    
+    // Imprimir
+    onPrint({ ...ventaData, fecha_hora: new Date(), id: 'NUEVA' });
+
     setPayingCabin(null);
-    alert("Cobro registrado exitosamente. La cabaña sigue OCUPADA.");
+    alert("Cobro registrado exitosamente.");
   };
 
   return (
@@ -374,6 +456,7 @@ function CabinsManager({ cabanas, onUpdate, onCheckout }) {
                    <p className="text-muted">Monto Base: {formatColones(payingCabin.info.monto)}</p>
                    <div style={{display:'grid', gap:'10px', marginTop:'1rem'}}>
                        <button className="btn btn-primary" onClick={() => handlePayCabin('Efectivo')}>💵 Efectivo (Sin IVA)</button>
+                       <button className="btn btn-primary" onClick={() => handlePayCabin('SINPE')}>📱 SINPE (Sin IVA)</button>
                        <button className="btn btn-primary" onClick={() => handlePayCabin('Tarjeta')}>💳 Tarjeta (+13% IVA)</button>
                        <button className="btn btn-outline" onClick={() => setPayingCabin(null)} style={{marginTop:'10px'}}>Cancelar</button>
                    </div>
@@ -733,9 +816,7 @@ function POSInterface({ table, menu, cabanas, onUpdateTable, onCloseOrder, onBac
   );
 }
 
-function HistoryManager({ history }) {
-  // 1. HELPER: Obtener fecha local en formato YYYY-MM-DD
-  // Esto arregla el problema de que salga "mañana" por la noche
+function HistoryManager({ history, onPrint }) {
   const getLocalDate = (d) => {
     const date = d || new Date();
     const year = date.getFullYear();
@@ -744,23 +825,18 @@ function HistoryManager({ history }) {
     return `${year}-${month}-${day}`;
   };
 
-  // 2. ESTADO: Inicia con la fecha LOCAL de hoy
   const [selectedDate, setSelectedDate] = useState(getLocalDate(new Date()));
 
-  // 3. HELPER: Convertir Timestamp de Firebase a objeto Date seguro
   const getSafeDate = (date) => {
     if (!date) return new Date();
     if (date.toDate) return date.toDate(); 
     return new Date(date);
   };
 
-  // 4. FILTRO: Compara usando la fecha local
   const filteredHistory = history.filter(h => {
     try {
       const dateObj = getSafeDate(h.fecha_hora);
       if (isNaN(dateObj.getTime())) return false; 
-      
-      // Convertimos la fecha de la venta a string local (YYYY-MM-DD)
       const hDate = getLocalDate(dateObj);
       return hDate === selectedDate;
     } catch (e) { return false; }
@@ -768,15 +844,33 @@ function HistoryManager({ history }) {
 
   const dayTotal = filteredHistory.reduce((sum, item) => sum + (Number(item.total_final) || 0), 0);
 
+  // --- LOGICA REPORTE CSV CON DESGLOSE ---
   const downloadDailyReport = () => {
     if (filteredHistory.length === 0) return alert("No hay ventas en la fecha seleccionada.");
+
+    // Calcular desglose por tipo de pago
+    const stats = { Efectivo: 0, SINPE: 0, Tarjeta: 0, Otro: 0 };
+    filteredHistory.forEach(h => {
+        const metodo = h.medio_pago || 'Otro';
+        const monto = Number(h.total_final) || 0;
+        if(stats[metodo] !== undefined) stats[metodo] += monto;
+        else stats['Otro'] += monto;
+    });
 
     let csv = "REPORTE DIARIO DE VENTAS\n";
     csv += `Fecha,${selectedDate}\n`;
     csv += `Generado el,${new Date().toLocaleString()}\n`;
-    csv += `Total Ventas,${filteredHistory.length}\n`;
+    csv += `Total Operaciones,${filteredHistory.length}\n`;
     csv += `MONTO TOTAL DEL DIA,${dayTotal}\n\n`;
+    
+    // Agregamos el desglose al CSV
+    csv += "DESGLOSE POR METODO DE PAGO\n";
+    csv += `Efectivo,${stats.Efectivo}\n`;
+    csv += `SINPE,${stats.SINPE}\n`;
+    csv += `Tarjeta,${stats.Tarjeta}\n\n`;
+
     csv += "========================================\n\n";
+    csv += "DETALLE DE OPERACIONES\n";
 
     filteredHistory.forEach((sale, index) => {
       const time = getSafeDate(sale.fecha_hora).toLocaleTimeString();
@@ -845,7 +939,6 @@ function HistoryManager({ history }) {
 
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
           <div style={{position:'relative'}}>
-             {/* Input controlado por la fecha local */}
              <input type="date" className="input-search" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} style={{paddingRight: '10px'}} />
           </div>
           <button className="btn btn-primary" onClick={downloadDailyReport} title="Descargar reporte completo de este día">
@@ -862,7 +955,7 @@ function HistoryManager({ history }) {
               <th>Mesa/Origen</th>
               <th>Items</th>
               <th>Total</th>
-              <th style={{textAlign:'center'}}>Factura</th>
+              <th style={{textAlign:'center'}}>Acciones</th>
             </tr>
           </thead>
           <tbody>
@@ -888,9 +981,12 @@ function HistoryManager({ history }) {
                      {(h.items || []).length} items
                   </td>
                   <td style={{ fontWeight: 'bold' }}>{formatColones(h.total_final)}</td>
-                  <td style={{ textAlign: 'center' }}>
-                    <button className="btn-icon" onClick={() => downloadSingleInvoice(h)} title="Descargar Factura Individual">
+                  <td style={{ textAlign: 'center', display: 'flex', gap: '5px', justifyContent: 'center' }}>
+                    <button className="btn-icon" onClick={() => downloadSingleInvoice(h)} title="Descargar CSV">
                       <FileText size={18} />
+                    </button>
+                    <button className="btn-icon" onClick={() => onPrint(h)} title="Imprimir Ticket">
+                      <Printer size={18} />
                     </button>
                   </td>
                 </tr>
