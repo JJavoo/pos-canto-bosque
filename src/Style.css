@@ -264,3 +264,27 @@ body {
     overflow-y: auto;
   }
 }
+
+/* --- ESTILOS DE IMPRESIÓN (TICKET) --- */
+#printable-receipt { display: none; }
+.ticket-header { text-align: center; margin-bottom: 10px; }
+.ticket-divider { border-top: 1px dashed black; margin: 5px 0; }
+.ticket-row { display: flex; justify-content: space-between; margin-bottom: 2px; }
+.ticket-footer { text-align: center; margin-top: 15px; font-size: 10px; }
+
+@media print {
+  .app-container, .no-print, .top-bar, .main-area { display: none !important; }
+  #printable-receipt {
+    display: block !important;
+    width: 100%;
+    position: absolute;
+    top: 0;
+    left: 0;
+    background: white;
+    color: black;
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+  }
+  @page { size: auto; margin: 0mm; }
+  body { margin: 0; padding: 0; background-color: white; }
+}
