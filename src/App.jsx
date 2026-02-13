@@ -10,6 +10,7 @@ import {
   serverTimestamp, runTransaction, getDocs, writeBatch, deleteDoc, setDoc, getDoc
 } from 'firebase/firestore';
 
+// Asegúrate de que el archivo de estilos se llame App.css
 import './App.css'; 
 
 // --- CONFIGURACIÓN & UTILIDADES ---
@@ -83,9 +84,10 @@ export default function App() {
   // --- FUNCION IMPRIMIR ---
   const handlePrint = (data) => {
     setTicketData(data);
+    // Damos un poco mas de tiempo para asegurar que React pinte el ticket antes de imprimir
     setTimeout(() => {
         window.print();
-    }, 300);
+    }, 500);
   };
 
   // --- CRUD MENU ---
@@ -234,46 +236,52 @@ export default function App() {
   const onPrintCabana = (venta) => handlePrint(venta);
 
   return (
-    <div className="app-container">
-      <header className="top-bar">
-        <div className="flex-center" style={{ gap: '1rem' }}>
-          {LOGO_URL ? <img src={LOGO_URL} alt="Logo" style={{ height: '40px' }} /> : <Utensils className="text-muted" />}
-          <div>
-            <h1 style={{ fontSize: '1.1rem', margin: 0, color: 'var(--primary)', fontWeight: 800 }}>Canto del Bosque</h1>
-            <div className="flex-center" style={{ gap: '6px', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-              <span style={{ width: 8, height: 8, background: '#22c55e', borderRadius: '50%' }}></span> Sistema POS v2.1
+    <>
+      {/* IMPORTANTE: Usamos un Fragmento (<> ... </>) para envolver todo.
+         El div 'app-container' tiene la clase 'no-print' que hace que se oculte al imprimir.
+         El componente 'PrintableTicket' está FUERA de ese div, por lo tanto SÍ se imprime.
+      */}
+      <div className="app-container no-print">
+        <header className="top-bar">
+          <div className="flex-center" style={{ gap: '1rem' }}>
+            {LOGO_URL ? <img src={LOGO_URL} alt="Logo" style={{ height: '40px' }} /> : <Utensils className="text-muted" />}
+            <div>
+              <h1 style={{ fontSize: '1.1rem', margin: 0, color: 'var(--primary)', fontWeight: 800 }}>Canto del Bosque</h1>
+              <div className="flex-center" style={{ gap: '6px', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                <span style={{ width: 8, height: 8, background: '#22c55e', borderRadius: '50%' }}></span> Sistema POS v2.1
+              </div>
             </div>
           </div>
-        </div>
 
-        <div className="flex-center" style={{ gap: '0.5rem' }}>
-          <NavBtn icon={<Coffee size={18} />} label="Mesas" active={view === 'tables' || view === 'pos'} onClick={() => setView('tables')} />
-          <NavBtn icon={<Tent size={18} />} label="Cabañas" active={view === 'cabanas'} onClick={() => setView('cabanas')} />
-          <NavBtn icon={<Archive size={18} />} label="Historial" active={view === 'history'} onClick={() => setView('history')} />
-          <NavBtn icon={<FileText size={18} />} label="Menú" active={view === 'menu'} onClick={() => setView('menu')} />
-        </div>
-      </header>
+          <div className="flex-center" style={{ gap: '0.5rem' }}>
+            <NavBtn icon={<Coffee size={18} />} label="Mesas" active={view === 'tables' || view === 'pos'} onClick={() => setView('tables')} />
+            <NavBtn icon={<Tent size={18} />} label="Cabañas" active={view === 'cabanas'} onClick={() => setView('cabanas')} />
+            <NavBtn icon={<Archive size={18} />} label="Historial" active={view === 'history'} onClick={() => setView('history')} />
+            <NavBtn icon={<FileText size={18} />} label="Menú" active={view === 'menu'} onClick={() => setView('menu')} />
+          </div>
+        </header>
 
-      <main className="main-area">
-        {view === 'tables' && (
-          <TablesManager tables={tables} onCreate={handleCreateTable} onOpen={(id) => { setSelectedTableId(id); setView('pos'); }} onDelete={handleDeleteTable} onRename={handleRenameTable} />
-        )}
-        {view === 'pos' && activeTable && (
-          <POSInterface table={activeTable} menu={menu} cabanas={cabanas} onUpdateTable={handleUpdateTable} onCloseOrder={handleCloseOrder} onBack={() => setView('tables')} />
-        )}
-        {view === 'cabanas' && (
-          <CabinsManager cabanas={cabanas} onUpdate={handleUpdateCabana} onCheckout={handleCheckoutCabana} onPrint={onPrintCabana} />
-        )}
-        {view === 'history' && <HistoryManager history={history} onPrint={handlePrint} />}
-        
-        {view === 'menu' && ( 
-          <MenuManager menu={menu} onAdd={addMenuItem} onUpdate={updateMenuItem} onDelete={deleteMenuItem} onBack={() => setView('tables')} />
-        )}
-      </main>
+        <main className="main-area">
+          {view === 'tables' && (
+            <TablesManager tables={tables} onCreate={handleCreateTable} onOpen={(id) => { setSelectedTableId(id); setView('pos'); }} onDelete={handleDeleteTable} onRename={handleRenameTable} />
+          )}
+          {view === 'pos' && activeTable && (
+            <POSInterface table={activeTable} menu={menu} cabanas={cabanas} onUpdateTable={handleUpdateTable} onCloseOrder={handleCloseOrder} onBack={() => setView('tables')} />
+          )}
+          {view === 'cabanas' && (
+            <CabinsManager cabanas={cabanas} onUpdate={handleUpdateCabana} onCheckout={handleCheckoutCabana} onPrint={onPrintCabana} />
+          )}
+          {view === 'history' && <HistoryManager history={history} onPrint={handlePrint} />}
+          
+          {view === 'menu' && ( 
+            <MenuManager menu={menu} onAdd={addMenuItem} onUpdate={updateMenuItem} onDelete={deleteMenuItem} onBack={() => setView('tables')} />
+          )}
+        </main>
+      </div>
       
-      {/* COMPONENTE DE TICKET (OCULTO EN PANTALLA, VISIBLE AL IMPRIMIR) */}
+      {/* TICKET DE IMPRESIÓN (Visible solo al imprimir) */}
       <PrintableTicket data={ticketData} />
-    </div>
+    </>
   );
 }
 
@@ -284,7 +292,7 @@ function PrintableTicket({ data }) {
 
   const { mesaNombre, fecha_hora, items, subtotal, impuesto_tarjeta, total_final, medio_pago, id } = data;
   
-  // Manejo seguro de fechas (Firebase timestamp vs JS Date)
+  // Manejo seguro de fechas
   const dateObj = fecha_hora?.toDate ? fecha_hora.toDate() : new Date(fecha_hora || Date.now());
   const fechaStr = dateObj.toLocaleDateString('es-CR');
   const horaStr = dateObj.toLocaleTimeString('es-CR', { hour: '2-digit', minute: '2-digit' });
@@ -293,7 +301,7 @@ function PrintableTicket({ data }) {
     <div id="printable-receipt">
       <div className="ticket-header">
         <h2 style={{ margin: 0, fontSize: '16px' }}>Canto del Bosque</h2>
-        <div>Tel: 8633-9009</div>
+        <div>Tel: 8888-8888</div>
         <div>Costa Rica</div>
       </div>
       
