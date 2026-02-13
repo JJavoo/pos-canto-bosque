@@ -20,7 +20,7 @@ body {
   background-color: var(--bg-app);
   color: var(--text-main);
   height: 100vh;
-  overflow: hidden; /* El scroll lo maneja la app internamente */
+  overflow: hidden; 
 }
 
 /* Layout Principal */
@@ -43,7 +43,7 @@ body {
 
 .main-area {
   flex: 1;
-  overflow: hidden; /* Vital para el layout dividido */
+  overflow: hidden; 
   padding: 1rem;
   position: relative;
 }
@@ -201,90 +201,72 @@ body {
 
 /* --- ESTILOS MÓVILES (Celular Vertical) --- */
 @media (max-width: 768px) {
-  
-  /* Barra Superior */
   .top-bar { padding: 0.5rem; gap: 0.5rem; flex-wrap: wrap; }
   .top-bar h1 { font-size: 1rem !important; }
-
-  /* Crear Mesa (Input ancho completo) */
-  .controls-header {
-    flex-direction: column !important;
-    align-items: stretch !important;
-    gap: 0.5rem;
-  }
+  .controls-header { flex-direction: column !important; align-items: stretch !important; gap: 0.5rem; }
   .controls-header .input-group { width: 100% !important; display: flex; gap: 0.5rem; }
   .input-search { width: 100% !important; }
-
-  /* Vista POS Dividida (Cuenta Arriba / Menú Abajo) */
   .main-area { padding: 0.5rem; overflow: hidden; }
-  
-  .pos-layout {
-    display: flex;
-    flex-direction: column;
-    height: 100%; /* Ocupa todo el alto disponible */
-    overflow: hidden;
-  }
-
-  /* Panel SUPERIOR: Cuenta (45% de la altura) */
-  .order-panel {
-    height: 45%; 
-    flex-shrink: 0;
-    border-bottom: 4px solid var(--primary);
-    border-radius: 8px 8px 0 0;
-  }
-
-  .order-items {
-    padding: 0.5rem;
-  }
-
-  .order-summary {
-    padding: 0.5rem 1rem !important;
-    flex-shrink: 0; /* Asegura que no se oculte */
-    z-index: 10;
-    box-shadow: 0 -4px 6px rgba(0,0,0,0.05);
-  }
-  
-  /* Ajustar texto en móvil para ahorrar espacio */
+  .pos-layout { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+  .order-panel { height: 45%; flex-shrink: 0; border-bottom: 4px solid var(--primary); border-radius: 8px 8px 0 0; }
+  .order-items { padding: 0.5rem; }
+  .order-summary { padding: 0.5rem 1rem !important; flex-shrink: 0; z-index: 10; box-shadow: 0 -4px 6px rgba(0,0,0,0.05); }
   .order-summary .text-muted, .order-summary b { font-size: 0.85rem; }
   .order-summary button { padding: 10px; margin-top: 0.5rem !important; }
-
-  /* Panel INFERIOR: Menú (Resto de la altura) */
-  .card:not(.order-panel) {
-    flex: 1; /* Ocupa el resto */
-    border-radius: 0 0 8px 8px;
-    padding: 0.5rem !important;
-    background: #f8fafc;
-    overflow: hidden; /* Importante para el scroll interno */
-    display: flex; 
-    flex-direction: column;
-  }
-  
-  /* Scroll solo en la lista de productos/categorías */
-  .card:not(.order-panel) > div:last-child {
-    overflow-y: auto;
-  }
+  .card:not(.order-panel) { flex: 1; border-radius: 0 0 8px 8px; padding: 0.5rem !important; background: #f8fafc; overflow: hidden; display: flex; flex-direction: column; }
+  .card:not(.order-panel) > div:last-child { overflow-y: auto; }
 }
 
 /* --- ESTILOS DE IMPRESIÓN (TICKET) --- */
+/* Ocultamos el ticket en la pantalla normal */
 #printable-receipt { display: none; }
-.ticket-header { text-align: center; margin-bottom: 10px; }
-.ticket-divider { border-top: 1px dashed black; margin: 5px 0; }
-.ticket-row { display: flex; justify-content: space-between; margin-bottom: 2px; }
-.ticket-footer { text-align: center; margin-top: 15px; font-size: 10px; }
 
 @media print {
-  .app-container, .no-print, .top-bar, .main-area { display: none !important; }
+  /* 1. Ocultamos TODA la interfaz de la App */
+  .no-print, .app-container, .top-bar, .main-area, header, nav, button {
+    display: none !important;
+    visibility: hidden !important;
+    height: 0 !important;
+  }
+
+  /* 2. Configuramos el cuerpo para impresión */
+  body {
+    background: white !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  /* 3. Mostramos y damos estilo al ticket */
   #printable-receipt {
     display: block !important;
-    width: 100%;
+    visibility: visible !important;
     position: absolute;
     top: 0;
     left: 0;
-    background: white;
-    color: black;
-    font-family: 'Courier New', monospace;
+    width: 80mm !important; /* Ancho impresora */
+    background: white !important;
+    color: black !important; /* Forzar negro */
+    font-family: 'Courier New', Courier, monospace;
     font-size: 12px;
+    padding: 2mm;
+    margin: 0;
   }
-  @page { size: auto; margin: 0mm; }
-  body { margin: 0; padding: 0; background-color: white; }
+  
+  /* Asegurar que todos los textos del ticket sean negros */
+  #printable-receipt * {
+    color: black !important;
+  }
+  
+  .ticket-header { text-align: center; margin-bottom: 10px; }
+  .ticket-divider { border-top: 1px dashed black; margin: 5px 0; }
+  .ticket-row { display: flex; justify-content: space-between; margin-bottom: 2px; }
+  .ticket-footer { text-align: center; margin-top: 15px; font-size: 10px; }
+
+  /* 4. Configuración de página para quitar encabezados del navegador */
+  @page {
+    size: auto;
+    margin: 0mm;
+  }
 }
