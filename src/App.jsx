@@ -301,8 +301,8 @@ function PrintableTicket({ data }) {
     <div id="printable-receipt">
       <div className="ticket-header">
         <h2 style={{ margin: 0, fontSize: '16px' }}>Canto del Bosque</h2>
-        <div>Tel: 8888-8888</div>
-        <div>Costa Rica</div>
+        <div>Tel: 8633-9009</div>
+        <div>2,5km al suroeste del Hospital San Vito, cerca de Bario Los Gamboa</div>
       </div>
       
       <div className="ticket-divider"></div>
