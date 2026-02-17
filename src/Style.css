@@ -223,50 +223,60 @@ body {
 
 @media print {
   /* 1. Ocultamos TODA la interfaz de la App */
-  .no-print, .app-container, .top-bar, .main-area, header, nav, button {
+  .no-print, .app-container, .top-bar, .main-area, header, nav, button, .card {
     display: none !important;
     visibility: hidden !important;
     height: 0 !important;
   }
 
-  /* 2. Configuramos el cuerpo para impresión */
+  /* 2. Configuramos la página: Sin márgenes y ancho de rollo */
+  @page {
+    size: 80mm auto; /* Ancho 80mm, altura automática */
+    margin: 0mm;     /* Sin márgenes para aprovechar el papel */
+  }
+
+  /* 3. Configuramos el cuerpo para impresión */
   body {
     background: white !important;
     margin: 0 !important;
     padding: 0 !important;
+    width: 80mm !important;
     height: auto !important;
     overflow: visible !important;
   }
 
-  /* 3. Mostramos y damos estilo al ticket */
+  /* 4. Mostramos y damos estilo al ticket */
   #printable-receipt {
     display: block !important;
     visibility: visible !important;
     position: absolute;
     top: 0;
     left: 0;
-    width: 80mm !important; /* Ancho impresora */
+    width: 100% !important; /* Ocupa el 100% de los 80mm */
     background: white !important;
-    color: black !important; /* Forzar negro */
-    font-family: 'Courier New', Courier, monospace;
-    font-size: 12px;
-    padding: 2mm;
+    color: black !important;
+    font-family: 'Courier New', Courier, monospace; /* Fuente monoespaciada */
+    font-size: 13px;
+    padding: 2mm 4mm 20mm 4mm; /* PADDING INFERIOR DE 20mm PARA EL CORTE */
     margin: 0;
+    line-height: 1.2;
   }
   
-  /* Asegurar que todos los textos del ticket sean negros */
+  /* Asegurar que todos los textos sean negros puro */
   #printable-receipt * {
     color: black !important;
   }
   
   .ticket-header { text-align: center; margin-bottom: 10px; }
-  .ticket-divider { border-top: 1px dashed black; margin: 5px 0; }
-  .ticket-row { display: flex; justify-content: space-between; margin-bottom: 2px; }
-  .ticket-footer { text-align: center; margin-top: 15px; font-size: 10px; }
-
-  /* 4. Configuración de página para quitar encabezados del navegador */
-  @page {
-    size: auto;
-    margin: 0mm;
+  .ticket-divider { border-top: 1px dashed black; margin: 8px 0; }
+  .ticket-row { display: flex; justify-content: space-between; margin-bottom: 4px; }
+  
+  /* El pie de página */
+  .ticket-footer { 
+      text-align: center; 
+      margin-top: 15px; 
+      font-size: 11px;
+      /* Esto asegura que haya algo de contenido al final */
+      padding-bottom: 5mm; 
   }
 }
