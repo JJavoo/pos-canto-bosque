@@ -158,10 +158,11 @@ export default function App() {
     if(finalItems.length === 0) return alert("No hay items para cobrar");
 
     try {
-      // Preparamos datos para guardar e imprimir
+      // Preparamos datos para guardar e imprimir con el cálculo del 13% como descuento para Efectivo/SINPE
       const subtotal = finalItems.reduce((s, it) => s + (Number(it.price) || 0), 0);
-      const impuesto = paymentMethod === 'Tarjeta' ? subtotal * 0.13 : 0;
-      const total = subtotal + impuesto;
+      const impuesto = subtotal * 0.13;
+      const descuento = paymentMethod !== 'Tarjeta' ? impuesto : 0;
+      const total = subtotal + impuesto - descuento;
       
       const ventaData = {
         fecha_hora: serverTimestamp(),
@@ -169,7 +170,8 @@ export default function App() {
         mesaNombre: tableData.name + (isPartial ? ' (Parcial)' : ''),
         items: finalItems, 
         subtotal, 
-        impuesto_tarjeta: impuesto,
+        impuesto: impuesto,
+        descuento: descuento,
         total_final: total, 
         medio_pago: paymentMethod,
         createdAt: serverTimestamp(),
@@ -194,7 +196,7 @@ export default function App() {
             }
         });
 
-        // Actualizar Mesa
+        // Actualizar Mesa o Borrarla
         if (isPartial) {
           const idsToPay = finalItems.map(i => i.instanceId);
           const remainingItems = allItems.filter(i => !idsToPay.includes(i.instanceId));
@@ -204,9 +206,8 @@ export default function App() {
             ultima_actualizacion: serverTimestamp(),
           });
         } else {
-          transaction.update(tableRef, {
-            items: [], status: 'free', payment: 'Efectivo', ultima_actualizacion: serverTimestamp(),
-          });
+          // Acá borramos la mesa definitivamente al pagar la cuenta completa
+          transaction.delete(tableRef);
         }
       });
       
@@ -237,10 +238,6 @@ export default function App() {
 
   return (
     <>
-      {/* IMPORTANTE: Usamos un Fragmento (<> ... </>) para envolver todo.
-         El div 'app-container' tiene la clase 'no-print' que hace que se oculte al imprimir.
-         El componente 'PrintableTicket' está FUERA de ese div, por lo tanto SÍ se imprime.
-      */}
       <div className="app-container no-print">
         <header className="top-bar">
           <div className="flex-center" style={{ gap: '1rem' }}>
@@ -290,7 +287,7 @@ export default function App() {
 function PrintableTicket({ data }) {
   if (!data) return null;
 
-  const { mesaNombre, fecha_hora, items, subtotal, impuesto_tarjeta, total_final, medio_pago, id } = data;
+  const { mesaNombre, fecha_hora, items, subtotal, impuesto, impuesto_tarjeta, descuento, total_final, medio_pago, id } = data;
   
   // Manejo seguro de fechas
   const dateObj = fecha_hora?.toDate ? fecha_hora.toDate() : new Date(fecha_hora || Date.now());
@@ -338,10 +335,16 @@ function PrintableTicket({ data }) {
         <span>{formatColones(subtotal)}</span>
       </div>
       
-      {impuesto_tarjeta > 0 && (
+      <div className="ticket-row">
+        <span>IVA (13%):</span>
+        {/* Uso impuesto_tarjeta también por si hay tickets viejos guardados de la versión anterior */}
+        <span>{formatColones(impuesto !== undefined ? impuesto : (impuesto_tarjeta || 0))}</span>
+      </div>
+
+      {descuento > 0 && (
         <div className="ticket-row">
-          <span>IVA (13%):</span>
-          <span>{formatColones(impuesto_tarjeta)}</span>
+          <span>Desc. ({medio_pago}):</span>
+          <span>-{formatColones(descuento)}</span>
         </div>
       )}
 
@@ -354,8 +357,8 @@ function PrintableTicket({ data }) {
         Pago: {medio_pago}
       </div>
 
-      <div className="ticket-footer">
-        <p>¡Gracias por su visita!</p>
+      <div className="ticket-footer" style={{ textAlign: 'center', marginTop: '15px' }}>
+        <span style={{ margin: 0 }}>¡Gracias por su visita!</span>
       </div>
     </div>
   );
@@ -363,18 +366,27 @@ function PrintableTicket({ data }) {
 
 function TablesManager({ tables, onCreate, onOpen, onDelete, onRename }) {
   const [name, setName] = useState('');
+  const [searchTerm, setSearchTerm] = useState(''); // <-- Estado para el buscador de mesas
+
+  const filteredTables = tables.filter(t => 
+    t.name.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
   return (
     <div className="card" style={{ padding: '1.5rem', height: '100%', overflowY: 'auto' }}>
-      <div className="controls-header" style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between' }}>
+      <div className="controls-header" style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px' }}>
         <h2 style={{ fontSize: '1.2rem', fontWeight: '800', margin: 0 }}>Restaurante</h2>
         <div className="input-group" style={{ display: 'flex', gap: '0.5rem' }}>
+          {/* Barra de búsqueda */}
+          <input className="input-search" style={{width: '150px'}} placeholder="Buscar mesa..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+          
           <input className="input-search" style={{width: '200px'}} placeholder="Nueva Mesa..." value={name} onChange={e => setName(e.target.value)} />
           <button className="btn btn-primary" onClick={() => { onCreate(name); setName(''); }}><Plus size={18} /> Crear</button>
         </div>
       </div>
 
       <div className="category-grid">
-        {tables.map(t => {
+        {filteredTables.map(t => {
           const total = (t.items || []).reduce((s, i) => s + (Number(i.price) || 0), 0);
           return (
             <div key={t.id} className="cat-card" style={{ position: 'relative', alignItems: 'flex-start', padding: '1.5rem', borderColor: t.status === 'occupied' ? 'var(--primary)' : 'var(--border)' }} onClick={() => onOpen(t.id)}>
@@ -425,9 +437,12 @@ function CabinsManager({ cabanas, onUpdate, onCheckout, onPrint }) {
 
   const handlePayCabin = async (method) => {
     if(!payingCabin) return;
+    
+    // Aplicamos también en las cabañas la lógica de IVA y descuento
     const montoBase = parseFloat(payingCabin.info.monto || 0);
-    const impuesto = method === 'Tarjeta' ? montoBase * 0.13 : 0;
-    const total = montoBase + impuesto;
+    const impuesto = montoBase * 0.13;
+    const descuento = method !== 'Tarjeta' ? impuesto : 0;
+    const total = montoBase + impuesto - descuento;
 
     if(!window.confirm(`¿Confirmar cobro de ${formatColones(total)} (${method}) para ${payingCabin.name}?`)) return;
 
@@ -436,7 +451,8 @@ function CabinsManager({ cabanas, onUpdate, onCheckout, onPrint }) {
         mesaNombre: `HOSPEDAJE - ${payingCabin.name}`,
         items: [{ name: `Alquiler ${payingCabin.name}`, price: montoBase, qty: 1 }],
         subtotal: montoBase,
-        impuesto_tarjeta: impuesto,
+        impuesto: impuesto,
+        descuento: descuento,
         total_final: total,
         medio_pago: method,
         createdAt: serverTimestamp(),
@@ -463,8 +479,8 @@ function CabinsManager({ cabanas, onUpdate, onCheckout, onPrint }) {
                    <h3>Cobrar {payingCabin.name}</h3>
                    <p className="text-muted">Monto Base: {formatColones(payingCabin.info.monto)}</p>
                    <div style={{display:'grid', gap:'10px', marginTop:'1rem'}}>
-                       <button className="btn btn-primary" onClick={() => handlePayCabin('Efectivo')}>💵 Efectivo (Sin IVA)</button>
-                       <button className="btn btn-primary" onClick={() => handlePayCabin('SINPE')}>📱 SINPE (Sin IVA)</button>
+                       <button className="btn btn-primary" onClick={() => handlePayCabin('Efectivo')}>💵 Efectivo (Desc IVA)</button>
+                       <button className="btn btn-primary" onClick={() => handlePayCabin('SINPE')}>📱 SINPE (Desc IVA)</button>
                        <button className="btn btn-primary" onClick={() => handlePayCabin('Tarjeta')}>💳 Tarjeta (+13% IVA)</button>
                        <button className="btn btn-outline" onClick={() => setPayingCabin(null)} style={{marginTop:'10px'}}>Cancelar</button>
                    </div>
@@ -563,8 +579,9 @@ function POSInterface({ table, menu, cabanas, onUpdateTable, onCloseOrder, onBac
     : (table.items || []);
 
   const subtotal = itemsToCalc.reduce((s, i) => s + (Number(i.price) || 0), 0);
-  const tax = table.payment === 'Tarjeta' ? subtotal * 0.13 : 0;
-  const total = subtotal + tax;
+  const tax = subtotal * 0.13;
+  const discount = table.payment !== 'Tarjeta' ? tax : 0;
+  const total = subtotal + tax - discount;
 
   const filtered = search 
     ? menu.filter(i => i.name.toLowerCase().includes(search.toLowerCase())) 
@@ -731,16 +748,28 @@ function POSInterface({ table, menu, cabanas, onUpdateTable, onCloseOrder, onBac
 
           <div style={{ display: 'grid', gap: '0.25rem', fontSize: '0.9rem' }}>
             {isSplitMode && <div style={{textAlign:'center', fontWeight:'bold', color:'orange', marginBottom:'5px'}}>Resumen Subcuenta</div>}
+            
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <span className="text-muted">Subtotal</span>
               <b>{formatColones(subtotal)}</b>
             </div>
+            
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <span className="text-muted">Impuesto (13%)</span>
               <div style={{ textAlign: 'right' }}>
                 <b>{formatColones(tax)}</b>
               </div>
             </div>
+
+            {discount > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span className="text-muted">Descuento ({table.payment})</span>
+                <div style={{ textAlign: 'right', color: 'red' }}>
+                  <b>-{formatColones(discount)}</b>
+                </div>
+              </div>
+            )}
+
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '1.2rem', marginTop: '0.5rem', borderTop: '2px solid var(--border)', paddingTop: '0.5rem' }}>
               <span>Total {isSplitMode ? '(Parcial)' : ''}</span>
               <b style={{ color: 'var(--primary)' }}>{formatColones(total)}</b>
@@ -852,6 +881,12 @@ function HistoryManager({ history, onPrint }) {
 
   const dayTotal = filteredHistory.reduce((sum, item) => sum + (Number(item.total_final) || 0), 0);
 
+  // Cálculos para desglose en el dashboard del Historial
+  const totalEfectivo = filteredHistory.filter(h => h.medio_pago === 'Efectivo').reduce((s, h) => s + (Number(h.total_final) || 0), 0);
+  const totalSinpe = filteredHistory.filter(h => h.medio_pago === 'SINPE').reduce((s, h) => s + (Number(h.total_final) || 0), 0);
+  const totalTarjeta = filteredHistory.filter(h => h.medio_pago === 'Tarjeta').reduce((s, h) => s + (Number(h.total_final) || 0), 0);
+  const totalVendido = dayTotal;
+
   // --- LOGICA REPORTE CSV CON DESGLOSE ---
   const downloadDailyReport = () => {
     if (filteredHistory.length === 0) return alert("No hay ventas en la fecha seleccionada.");
@@ -935,14 +970,11 @@ function HistoryManager({ history, onPrint }) {
   };
 
   return (
-    <div className="card" style={{ padding: '1rem', height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <div className="card" style={{ padding: '1rem', height: '100%', display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
       
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '10px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '10px' }}>
         <div>
            <h2 style={{fontSize:'1.2rem', fontWeight:'800', margin:0}}>Historial de Ventas</h2>
-           <div style={{fontSize:'0.85rem', color:'var(--text-muted)'}}>
-             Ventas del día: <b>{formatColones(dayTotal)}</b> ({filteredHistory.length} ops)
-           </div>
         </div>
 
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
@@ -952,6 +984,26 @@ function HistoryManager({ history, onPrint }) {
           <button className="btn btn-primary" onClick={downloadDailyReport} title="Descargar reporte completo de este día">
             <Archive size={18} /> Descargar Día
           </button>
+        </div>
+      </div>
+
+      {/* TARJETAS DE DESGLOSE */}
+      <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
+        <div style={{ padding: '1rem', flex: 1, background: '#f1f5f9', borderRadius: '8px', border: '1px solid #e2e8f0', minWidth: '120px' }}>
+          <div style={{ fontSize: '0.85rem', color: '#64748b' }}>Total Vendido</div>
+          <div style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{formatColones(totalVendido)}</div>
+        </div>
+        <div style={{ padding: '1rem', flex: 1, background: '#f8fafc', borderRadius: '8px', borderLeft: '4px solid #15803d', minWidth: '120px' }}>
+          <div style={{ fontSize: '0.85rem', color: '#64748b' }}>Efectivo</div>
+          <div style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{formatColones(totalEfectivo)}</div>
+        </div>
+        <div style={{ padding: '1rem', flex: 1, background: '#f8fafc', borderRadius: '8px', borderLeft: '4px solid #3b82f6', minWidth: '120px' }}>
+          <div style={{ fontSize: '0.85rem', color: '#64748b' }}>SINPE</div>
+          <div style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{formatColones(totalSinpe)}</div>
+        </div>
+        <div style={{ padding: '1rem', flex: 1, background: '#f8fafc', borderRadius: '8px', borderLeft: '4px solid #f59e0b', minWidth: '120px' }}>
+          <div style={{ fontSize: '0.85rem', color: '#64748b' }}>Tarjeta</div>
+          <div style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{formatColones(totalTarjeta)}</div>
         </div>
       </div>
       
