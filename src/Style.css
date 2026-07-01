@@ -90,6 +90,19 @@ body {
 }
 .btn-icon:hover { background: var(--border); }
 
+.btn-danger { background: var(--danger); color: white; }
+.btn-danger:hover { background: #dc2626; }
+
+.btn-icon-mini {
+  width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%; border: none; cursor: pointer;
+  background: rgba(255,255,255,0.9); box-shadow: var(--shadow);
+}
+.btn-icon-mini:hover { background: var(--border); }
+
+.text-muted { color: var(--text-muted); }
+
 /* Inputs */
 .input-search {
   width: 100%;
@@ -173,6 +186,12 @@ body {
 .prod-name { font-weight: 600; font-size: 0.85rem; line-height: 1.2; }
 .prod-price { color: var(--primary); font-weight: bold; font-size: 0.9rem; }
 
+.cat-icon { font-size: 2rem; margin-bottom: 0.5rem; }
+.cat-name { font-weight: 600; font-size: 0.95rem; }
+
+.split-selectable { cursor: pointer; transition: 0.15s; }
+.split-selectable:hover { background: #f8fafc !important; }
+
 /* Selector Pago */
 .payment-selector {
   display: flex; background: white;
@@ -191,6 +210,64 @@ body {
 
 /* Historial Table */
 .table-responsive { width: 100%; overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
+
+/* Reportes: gráfica de ventas por día */
+.report-daychart {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 160px;
+  padding: 0.5rem;
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow-x: auto;
+}
+.report-daybar {
+  flex: 1;
+  min-width: 14px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  position: relative;
+}
+.report-daybar-fill {
+  width: 100%;
+  background: var(--primary);
+  border-radius: 3px 3px 0 0;
+  min-height: 2px;
+  transition: 0.2s;
+}
+.report-daybar-fill:hover { background: var(--primary-hover); }
+.report-daybar-label {
+  font-size: 0.6rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+/* Reportes: ranking de productos */
+.report-product-row { display: flex; flex-direction: column; gap: 4px; }
+.report-product-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+.report-product-bar {
+  width: 100%;
+  height: 10px;
+  background: var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.report-product-bar-fill {
+  height: 100%;
+  background: var(--primary);
+  border-radius: 5px;
+  transition: width 0.3s;
+}
 .history-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 .history-table th { background: var(--bg-app); padding: 12px; text-align: left; }
 .history-table td { padding: 12px; border-bottom: 1px solid var(--border); }
@@ -203,7 +280,6 @@ body {
    📱 ESTILOS MÓVILES TOTALMENTE OPTIMIZADOS
    ========================================= */
 @media screen and (max-width: 768px) {
-  /* 1. Barra superior: scrolleable hacia los lados para no perder botones */
   .top-bar {
     flex-direction: column !important;
     align-items: flex-start !important;
@@ -215,26 +291,24 @@ body {
   
   .top-bar > div:nth-child(2) {
     width: 100%;
-    overflow-x: auto; /* Permite deslizar los botones con el dedo */
+    overflow-x: auto; 
     justify-content: flex-start !important;
     padding-bottom: 5px;
     -webkit-overflow-scrolling: touch;
   }
   .top-bar button {
-    white-space: nowrap; /* Evita que el texto del botón se rompa a la mitad */
+    white-space: nowrap; 
   }
 
   .main-area { padding: 0.5rem; overflow: hidden; }
 
-  /* 2. Pantalla principal de ventas (POS) */
   .pos-layout {
     display: flex !important;
-    flex-direction: column-reverse !important; /* Menú arriba, Factura abajo */
+    flex-direction: column-reverse !important;
     overflow: hidden !important; 
     height: 100% !important;
   }
   
-  /* Panel del Menú (queda en la mitad superior) */
   .pos-layout > .card:nth-child(2) {
     flex: 1 !important; 
     overflow-y: auto !important;
@@ -243,10 +317,9 @@ body {
     padding: 0.5rem !important;
   }
 
-  /* Panel de la Cuenta/Carrito (queda fijo en la parte de abajo) */
   .order-panel {
     width: 100% !important;
-    height: 45vh !important; /* Ocupa el 45% de la pantalla inferior */
+    height: 45vh !important; 
     border-right: none !important;
     border-top: 3px solid var(--primary) !important; 
     border-radius: 16px 16px 0 0 !important; 
@@ -259,13 +332,11 @@ body {
   .order-summary .text-muted, .order-summary b { font-size: 0.85rem; }
   .order-summary button { padding: 10px; margin-top: 0.5rem !important; }
 
-  /* Achicar las tarjetas de productos para que quepan varias por fila */
   .category-grid, .product-grid {
     grid-template-columns: repeat(auto-fill, minmax(105px, 1fr)) !important;
     gap: 8px !important;
   }
 
-  /* 3. Botones y Buscadores a ancho completo */
   .controls-header {
     flex-direction: column !important;
     align-items: stretch !important;
@@ -282,12 +353,10 @@ body {
     margin-left: 0 !important;
   }
 
-  /* 4. Cabañas y Mesas: 1 por fila para leer bien los datos */
   .card .category-grid {
     grid-template-columns: 1fr !important; 
   }
 
-  /* 5. Historial: Permitir que la tabla se deslice de lado sin aplastar los números */
   .table-responsive {
     overflow-x: auto !important;
     display: block;
@@ -295,10 +364,9 @@ body {
     -webkit-overflow-scrolling: touch;
   }
   .history-table {
-    min-width: 650px; /* Fuerza el ancho para hacer scroll en vez de colapsar */
+    min-width: 650px; 
   }
   
-  /* 6. Modales centrados (Ej: Popup de cobro de cabañas) */
   div[style*="width: 300px"], div[style*="width:'300px'"], div[style*="width: '300px'"] {
     width: 90% !important;
     padding: 1.5rem !important;
@@ -308,24 +376,20 @@ body {
 /* =========================================
    🖨️ ESTILOS DE IMPRESIÓN (TICKET)
    ========================================= */
-/* Ocultamos el ticket en la pantalla normal */
 #printable-receipt { display: none; }
 
 @media print {
-  /* 1. Ocultamos TODA la interfaz de la App */
   .no-print, .app-container, .top-bar, .main-area, header, nav, button, .card {
     display: none !important;
     visibility: hidden !important;
     height: 0 !important;
   }
 
-  /* 2. Configuramos la página: Sin márgenes y ancho de rollo */
   @page {
-    size: 80mm auto; /* Ancho 80mm, altura automática */
-    margin: 0mm;     /* Sin márgenes para aprovechar el papel */
+    size: 80mm auto; 
+    margin: 0mm;     
   }
 
-  /* 3. Configuramos el cuerpo para impresión */
   body {
     background: white !important;
     margin: 0 !important;
@@ -335,24 +399,22 @@ body {
     overflow: visible !important;
   }
 
-  /* 4. Mostramos y damos estilo al ticket */
   #printable-receipt {
     display: block !important;
     visibility: visible !important;
     position: absolute;
     top: 0;
     left: 0;
-    width: 100% !important; /* Ocupa el 100% de los 80mm */
+    width: 100% !important; 
     background: white !important;
     color: black !important;
-    font-family: 'Courier New', Courier, monospace; /* Fuente monoespaciada */
+    font-family: 'Courier New', Courier, monospace; 
     font-size: 13px;
-    padding: 2mm 4mm 20mm 4mm; /* PADDING INFERIOR DE 20mm PARA EL CORTE */
+    padding: 2mm 4mm 20mm 4mm; 
     margin: 0;
     line-height: 1.2;
   }
   
-  /* Asegurar que todos los textos sean negros puro */
   #printable-receipt * {
     color: black !important;
   }
@@ -361,12 +423,63 @@ body {
   .ticket-divider { border-top: 1px dashed black; margin: 8px 0; }
   .ticket-row { display: flex; justify-content: space-between; margin-bottom: 4px; }
   
-  /* El pie de página */
   .ticket-footer { 
       text-align: center; 
       margin-top: 15px; 
       font-size: 11px;
-      /* Esto asegura que haya algo de contenido al final */
       padding-bottom: 5mm; 
   }
 }
+
+/* =========================================
+   🍳 ESTILOS DE COMANDAS DIGITALES (COCINA)
+   ========================================= */
+.comanda-card {
+  background: var(--bg-card);
+  border: 2px solid var(--border);
+  border-top: 5px solid #f59e0b; /* Naranja para pendiente */
+  border-radius: 12px;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: var(--shadow);
+  transition: 0.3s;
+}
+
+.comanda-card.ready {
+  border-top-color: #10b981; /* Verde cuando todo está listo */
+  opacity: 0.8;
+}
+
+.comanda-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px;
+  background: #f8fafc;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  font-size: 0.95rem;
+}
+
+.comanda-item.item-ready {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+  text-decoration: line-through;
+  color: #15803d;
+}
+
+.badge-status {
+  font-size: 0.7rem;
+  padding: 4px 8px;
+  border-radius: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  margin-left: 8px;
+  display: inline-block;
+}
+
+.status-nuevo { background: #e2e8f0; color: #475569; }
+.status-pendiente { background: #fef3c7; color: #d97706; }
+.status-listo { background: #d1fae5; color: #059669; }
