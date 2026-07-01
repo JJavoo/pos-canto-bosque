@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Utensils, Coffee, Archive, ChevronLeft, Trash2, ArrowLeft, Plus, Minus, 
-  Search, XCircle, Tent, Edit, Users, FileText, CheckCircle, Save, Printer
+  Search, XCircle, Tent, Edit, Users, FileText, CheckCircle, Save, Printer, 
+  BarChart3, Banknote, ChefHat, Check
 } from 'lucide-react';
 
 import { db } from './firebase';
 import {
-  collection, onSnapshot, addDoc, updateDoc, doc, query, orderBy,
+  collection, onSnapshot, addDoc, updateDoc, doc, query, orderBy, where,
   serverTimestamp, runTransaction, getDocs, writeBatch, deleteDoc, setDoc, getDoc
 } from 'firebase/firestore';
 
@@ -32,7 +33,7 @@ const formatColones = (val) => {
 
 // --- APP PRINCIPAL ---
 export default function App() {
-  const [view, setView] = useState('tables'); // tables | cabanas | pos | history | menu
+  const [view, setView] = useState('tables'); // tables | cabanas | pos | history | reports | menu | kitchen
   const [menu, setMenu] = useState([]);
   const [tables, setTables] = useState([]);
   const [history, setHistory] = useState([]);
@@ -84,11 +85,18 @@ export default function App() {
   // --- FUNCION IMPRIMIR ---
   const handlePrint = (data) => {
     setTicketData(data);
-    // Damos un poco mas de tiempo para asegurar que React pinte el ticket antes de imprimir
-    setTimeout(() => {
-        window.print();
-    }, 500);
   };
+
+  useEffect(() => {
+    if (!ticketData) return;
+    let raf1, raf2;
+    raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        window.print();
+      });
+    });
+    return () => { cancelAnimationFrame(raf1); cancelAnimationFrame(raf2); };
+  }, [ticketData]);
 
   // --- CRUD MENU ---
   const addMenuItem = async (category, name, price) => {
@@ -158,8 +166,18 @@ export default function App() {
     if(finalItems.length === 0) return alert("No hay items para cobrar");
 
     try {
-      // Preparamos datos para guardar e imprimir con el cálculo del 13% como descuento para Efectivo/SINPE
-      const subtotal = finalItems.reduce((s, it) => s + (Number(it.price) || 0), 0);
+      const subtotalYaCobrado = !isPartial ? (Number(tableData.subtotalPagado) || 0) : 0;
+      const subtotalBruto = finalItems.reduce((s, it) => s + (Number(it.price) || 0), 0);
+      const subtotal = subtotalBruto - subtotalYaCobrado;
+
+      if (subtotal <= 0) {
+        if (!window.confirm('Esta cuenta ya fue cobrada por completo mediante abonos. ¿Cerrar la mesa?')) return;
+        await deleteDoc(tableRef);
+        setView('tables');
+        setSelectedTableId(null);
+        return;
+      }
+
       const impuesto = subtotal * 0.13;
       const descuento = paymentMethod !== 'Tarjeta' ? impuesto : 0;
       const total = subtotal + impuesto - descuento;
@@ -188,7 +206,6 @@ export default function App() {
         const newVentaRef = doc(ventasColl);
         transaction.set(newVentaRef, ventaData);
 
-        // Actualizar estado pago Cabaña si corresponde
         finalItems.forEach(item => {
             if (item.linkedCabinId) {
                 const cabinRef = doc(db, 'cabanas', item.linkedCabinId);
@@ -196,7 +213,6 @@ export default function App() {
             }
         });
 
-        // Actualizar Mesa o Borrarla
         if (isPartial) {
           const idsToPay = finalItems.map(i => i.instanceId);
           const remainingItems = allItems.filter(i => !idsToPay.includes(i.instanceId));
@@ -206,12 +222,10 @@ export default function App() {
             ultima_actualizacion: serverTimestamp(),
           });
         } else {
-          // Acá borramos la mesa definitivamente al pagar la cuenta completa
           transaction.delete(tableRef);
         }
       });
       
-      // Imprimir Ticket Automáticamente (Usamos new Date porque serverTimestamp es asíncrono)
       handlePrint({ ...ventaData, fecha_hora: new Date(), id: 'NUEVA' });
 
       if(!isPartial) {
@@ -222,8 +236,77 @@ export default function App() {
       }
     } catch (e) { alert('Error: ' + e.message); }
   };
+
+  const handlePartialAmountPayment = async (tableData, monto, paymentMethod) => {
+    const tableRef = doc(db, 'mesas', tableData.id);
+    const ventasColl = collection(db, 'ventas');
+
+    const montoNum = Number(monto);
+    if (!montoNum || montoNum <= 0) return alert('Ingresa un monto válido');
+
+    const subtotalTotal = (tableData.items || []).reduce((s, it) => s + (Number(it.price) || 0), 0);
+    const subtotalYaCobrado = Number(tableData.subtotalPagado) || 0;
+    const subtotalPendiente = Math.max(0, subtotalTotal - subtotalYaCobrado);
+
+    const subtotalPortion = paymentMethod === 'Tarjeta' ? montoNum / 1.13 : montoNum;
+
+    if (subtotalPortion - subtotalPendiente > 0.5) {
+      const maximoSugerido = paymentMethod === 'Tarjeta' ? subtotalPendiente * 1.13 : subtotalPendiente;
+      return alert(`Ese monto supera lo pendiente por cobrar. Máximo: ${formatColones(maximoSugerido)}`);
+    }
+
+    const impuesto = paymentMethod === 'Tarjeta' ? montoNum - subtotalPortion : subtotalPortion * 0.13;
+    const descuento = paymentMethod !== 'Tarjeta' ? impuesto : 0;
+
+    const ventaData = {
+      fecha_hora: serverTimestamp(),
+      mesaId: tableData.id,
+      mesaNombre: tableData.name + ' (Abono)',
+      items: [{ name: 'Abono a la cuenta', price: subtotalPortion, qty: 1 }],
+      subtotal: subtotalPortion,
+      impuesto,
+      descuento,
+      total_final: montoNum,
+      medio_pago: paymentMethod,
+      createdAt: serverTimestamp(),
+      tipo: 'Abono'
+    };
+
+    try {
+      let mesaQuedaCerrada = false;
+
+      await runTransaction(db, async (transaction) => {
+        const tSnap = await transaction.get(tableRef);
+        if (!tSnap.exists()) throw new Error('Mesa no existe');
+
+        const currentTable = tSnap.data();
+        const subtotalActual = (currentTable.items || []).reduce((s, it) => s + (Number(it.price) || 0), 0);
+        const yaCobradoActual = Number(currentTable.subtotalPagado) || 0;
+        const nuevoAcumulado = yaCobradoActual + subtotalPortion;
+
+        const newVentaRef = doc(ventasColl);
+        transaction.set(newVentaRef, ventaData);
+
+        if (nuevoAcumulado >= subtotalActual - 0.5) {
+          mesaQuedaCerrada = true;
+          transaction.delete(tableRef);
+        } else {
+          transaction.update(tableRef, {
+            subtotalPagado: nuevoAcumulado,
+            ultima_actualizacion: serverTimestamp(),
+          });
+        }
+      });
+
+      handlePrint({ ...ventaData, fecha_hora: new Date(), id: 'NUEVA' });
+
+      if (mesaQuedaCerrada) {
+        setView('tables');
+        setSelectedTableId(null);
+      }
+    } catch (e) { alert('Error: ' + e.message); }
+  };
   
-  // --- HANDLERS CABAÑAS ---
   const handleUpdateCabana = async (docId, newData) => {
     await updateDoc(doc(db, 'cabanas', docId), newData);
   };
@@ -233,7 +316,6 @@ export default function App() {
     await updateDoc(doc(db, 'cabanas', cabana.docId), { status: 'Libre', info: {} });
   };
 
-  // Pasar funcion de imprimir a cabañas también
   const onPrintCabana = (venta) => handlePrint(venta);
 
   return (
@@ -252,8 +334,10 @@ export default function App() {
 
           <div className="flex-center" style={{ gap: '0.5rem' }}>
             <NavBtn icon={<Coffee size={18} />} label="Mesas" active={view === 'tables' || view === 'pos'} onClick={() => setView('tables')} />
+            <NavBtn icon={<ChefHat size={18} />} label="Cocina" active={view === 'kitchen'} onClick={() => setView('kitchen')} />
             <NavBtn icon={<Tent size={18} />} label="Cabañas" active={view === 'cabanas'} onClick={() => setView('cabanas')} />
             <NavBtn icon={<Archive size={18} />} label="Historial" active={view === 'history'} onClick={() => setView('history')} />
+            <NavBtn icon={<BarChart3 size={18} />} label="Reportes" active={view === 'reports'} onClick={() => setView('reports')} />
             <NavBtn icon={<FileText size={18} />} label="Menú" active={view === 'menu'} onClick={() => setView('menu')} />
           </div>
         </header>
@@ -263,20 +347,22 @@ export default function App() {
             <TablesManager tables={tables} onCreate={handleCreateTable} onOpen={(id) => { setSelectedTableId(id); setView('pos'); }} onDelete={handleDeleteTable} onRename={handleRenameTable} />
           )}
           {view === 'pos' && activeTable && (
-            <POSInterface table={activeTable} menu={menu} cabanas={cabanas} onUpdateTable={handleUpdateTable} onCloseOrder={handleCloseOrder} onBack={() => setView('tables')} />
+            <POSInterface table={activeTable} menu={menu} cabanas={cabanas} onUpdateTable={handleUpdateTable} onCloseOrder={handleCloseOrder} onPartialAmount={handlePartialAmountPayment} onBack={() => setView('tables')} />
+          )}
+          {view === 'kitchen' && (
+            <KitchenManager tables={tables} onUpdateTable={handleUpdateTable} />
           )}
           {view === 'cabanas' && (
             <CabinsManager cabanas={cabanas} onUpdate={handleUpdateCabana} onCheckout={handleCheckoutCabana} onPrint={onPrintCabana} />
           )}
           {view === 'history' && <HistoryManager history={history} onPrint={handlePrint} />}
-          
+          {view === 'reports' && <ReportsManager />}
           {view === 'menu' && ( 
             <MenuManager menu={menu} onAdd={addMenuItem} onUpdate={updateMenuItem} onDelete={deleteMenuItem} onBack={() => setView('tables')} />
           )}
         </main>
       </div>
       
-      {/* TICKET DE IMPRESIÓN (Visible solo al imprimir) */}
       <PrintableTicket data={ticketData} />
     </>
   );
@@ -288,8 +374,6 @@ function PrintableTicket({ data }) {
   if (!data) return null;
 
   const { mesaNombre, fecha_hora, items, subtotal, impuesto, impuesto_tarjeta, descuento, total_final, medio_pago, id } = data;
-  
-  // Manejo seguro de fechas
   const dateObj = fecha_hora?.toDate ? fecha_hora.toDate() : new Date(fecha_hora || Date.now());
   const fechaStr = dateObj.toLocaleDateString('es-CR');
   const horaStr = dateObj.toLocaleTimeString('es-CR', { hour: '2-digit', minute: '2-digit' });
@@ -301,18 +385,14 @@ function PrintableTicket({ data }) {
         <div>Tel: 8633-9009</div>
         <div>2,5km al suroeste del Hospital San Vito, cerca de Bario Los Gamboa</div>
       </div>
-      
       <div className="ticket-divider"></div>
-      
       <div style={{display:'flex', justifyContent:'space-between'}}>
          <span>Fecha: {fechaStr}</span>
          <span>Hora: {horaStr}</span>
       </div>
       <div>Cliente: {mesaNombre}</div>
       <div>Factura #: {id ? id.slice(-6).toUpperCase() : '---'}</div>
-      
       <div className="ticket-divider"></div>
-
       <div className="ticket-row" style={{ fontWeight: 'bold' }}>
         <span style={{flex: 1}}>Cant. Desc</span>
         <span>Total</span>
@@ -329,34 +409,13 @@ function PrintableTicket({ data }) {
       ))}
 
       <div className="ticket-divider"></div>
-
-      <div className="ticket-row">
-        <span>Subtotal:</span>
-        <span>{formatColones(subtotal)}</span>
-      </div>
-      
-      <div className="ticket-row">
-        <span>IVA (13%):</span>
-        {/* Uso impuesto_tarjeta también por si hay tickets viejos guardados de la versión anterior */}
-        <span>{formatColones(impuesto !== undefined ? impuesto : (impuesto_tarjeta || 0))}</span>
-      </div>
-
-      {descuento > 0 && (
-        <div className="ticket-row">
-          <span>Desc. ({medio_pago}):</span>
-          <span>-{formatColones(descuento)}</span>
-        </div>
-      )}
-
+      <div className="ticket-row"><span>Subtotal:</span><span>{formatColones(subtotal)}</span></div>
+      <div className="ticket-row"><span>IVA (13%):</span><span>{formatColones(impuesto !== undefined ? impuesto : (impuesto_tarjeta || 0))}</span></div>
+      {descuento > 0 && <div className="ticket-row"><span>Desc. ({medio_pago}):</span><span>-{formatColones(descuento)}</span></div>}
       <div className="ticket-row" style={{ fontSize: '16px', fontWeight: 'bold', marginTop: '5px' }}>
-        <span>TOTAL:</span>
-        <span>{formatColones(total_final)}</span>
+        <span>TOTAL:</span><span>{formatColones(total_final)}</span>
       </div>
-      
-      <div style={{textAlign:'right', fontSize:'11px', marginTop:'5px'}}>
-        Pago: {medio_pago}
-      </div>
-
+      <div style={{textAlign:'right', fontSize:'11px', marginTop:'5px'}}>Pago: {medio_pago}</div>
       <div className="ticket-footer" style={{ textAlign: 'center', marginTop: '15px' }}>
         <span style={{ margin: 0 }}>¡Gracias por su visita!</span>
       </div>
@@ -366,7 +425,7 @@ function PrintableTicket({ data }) {
 
 function TablesManager({ tables, onCreate, onOpen, onDelete, onRename }) {
   const [name, setName] = useState('');
-  const [searchTerm, setSearchTerm] = useState(''); // <-- Estado para el buscador de mesas
+  const [searchTerm, setSearchTerm] = useState('');
 
   const filteredTables = tables.filter(t => 
     t.name.toLowerCase().includes(searchTerm.toLowerCase())
@@ -377,9 +436,7 @@ function TablesManager({ tables, onCreate, onOpen, onDelete, onRename }) {
       <div className="controls-header" style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px' }}>
         <h2 style={{ fontSize: '1.2rem', fontWeight: '800', margin: 0 }}>Restaurante</h2>
         <div className="input-group" style={{ display: 'flex', gap: '0.5rem' }}>
-          {/* Barra de búsqueda */}
           <input className="input-search" style={{width: '150px'}} placeholder="Buscar mesa..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
-          
           <input className="input-search" style={{width: '200px'}} placeholder="Nueva Mesa..." value={name} onChange={e => setName(e.target.value)} />
           <button className="btn btn-primary" onClick={() => { onCreate(name); setName(''); }}><Plus size={18} /> Crear</button>
         </div>
@@ -413,6 +470,94 @@ function TablesManager({ tables, onCreate, onOpen, onDelete, onRename }) {
   );
 }
 
+function KitchenManager({ tables, onUpdateTable }) {
+  const [idsConocidos, setIdsConocidos] = useState(new Set());
+  
+  // URL por defecto (puedes cambiarla por un archivo local si lo deseas)
+  const audioRef = useRef(new Audio('https://actions.google.com/sounds/v1/alarms/dinner_bell_triangle.ogg'));
+
+  useEffect(() => {
+    const pendientesActuales = new Set();
+    let hayNuevo = false;
+
+    tables.forEach(t => {
+      (t.items || []).forEach(i => {
+        if (i.estadoCocina === 'Pendiente') {
+          pendientesActuales.add(i.instanceId);
+          if (!idsConocidos.has(i.instanceId)) {
+            hayNuevo = true;
+          }
+        }
+      });
+    });
+
+    if (hayNuevo) {
+      audioRef.current.play().catch(err => {
+        console.warn("Navegador bloqueó autoplay. El usuario debe interactuar con la pantalla.", err);
+      });
+    }
+
+    setIdsConocidos(pendientesActuales);
+  }, [tables, idsConocidos]);
+
+  const comandasActivas = tables.filter(t => t.items && t.items.some(i => i.estadoCocina === 'Pendiente'));
+
+  const marcarItemListo = (table, instanceId) => {
+    const newItems = table.items.map(i => i.instanceId === instanceId ? { ...i, estadoCocina: 'Listo' } : i);
+    onUpdateTable({ ...table, items: newItems });
+  };
+
+  const marcarTodoListo = (table) => {
+    const newItems = table.items.map(i => i.estadoCocina === 'Pendiente' ? { ...i, estadoCocina: 'Listo' } : i);
+    onUpdateTable({ ...table, items: newItems });
+  };
+
+  if (comandasActivas.length === 0) {
+    return (
+      <div className="card" style={{ padding: '3rem', textAlign: 'center', height: '100%', background: '#f8fafc' }}>
+        <ChefHat size={48} color="#cbd5e1" style={{ marginBottom: '1rem' }} />
+        <h2 style={{ color: '#64748b' }}>No hay pedidos en cola</h2>
+        <p className="text-muted">La cocina está libre por el momento.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card" style={{ padding: '1.5rem', height: '100%', overflowY: 'auto', background: '#f8fafc' }}>
+      <h2 style={{ fontSize: '1.2rem', fontWeight: '800', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <ChefHat size={20} /> Comandas en Preparación
+      </h2>
+      <div className="category-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))' }}>
+        {comandasActivas.map(table => {
+          const itemsPendientes = table.items.filter(i => i.estadoCocina === 'Pendiente');
+          
+          return (
+            <div key={table.id} className="comanda-card">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)', paddingBottom: '10px' }}>
+                 <h3 style={{ margin: 0, fontSize: '1.1rem', color: 'var(--text-main)' }}>{table.name}</h3>
+                 <button className="btn btn-outline" style={{ fontSize: '0.8rem', borderColor: '#10b981', color: '#10b981', padding: '4px 8px' }} onClick={() => marcarTodoListo(table)}>
+                   <Check size={14} /> Todo Listo
+                 </button>
+              </div>
+              
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {itemsPendientes.map(item => (
+                   <div key={item.instanceId} className="comanda-item">
+                     <div style={{ fontWeight: 600 }}>1x {item.name}</div>
+                     <button className="btn-icon" style={{ color: '#059669', background: '#d1fae5', width: '28px', height: '28px' }} onClick={() => marcarItemListo(table, item.instanceId)}>
+                       <Check size={14} />
+                     </button>
+                   </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function CabinsManager({ cabanas, onUpdate, onCheckout, onPrint }) {
   const [editingId, setEditingId] = useState(null);
   const [tempData, setTempData] = useState({});
@@ -423,22 +568,17 @@ function CabinsManager({ cabanas, onUpdate, onCheckout, onPrint }) {
     setTempData(c.info || {});
   };
 
-  const saveEdit = (docId) => {
-    onUpdate(docId, { 
-      info: tempData,
-      status: 'Ocupada' 
-    });
+  const saveEdit = (docId, originalInfo) => {
+    const montoCambio = Number(originalInfo?.monto || 0) !== Number(tempData.monto || 0);
+    const nuevoInfo = montoCambio ? { ...tempData, estadoPago: null } : tempData;
+    onUpdate(docId, { info: nuevoInfo, status: 'Ocupada' });
     setEditingId(null);
   };
 
-  const handleChange = (field, val) => {
-    setTempData(prev => ({ ...prev, [field]: val }));
-  };
+  const handleChange = (field, val) => setTempData(prev => ({ ...prev, [field]: val }));
 
   const handlePayCabin = async (method) => {
     if(!payingCabin) return;
-    
-    // Aplicamos también en las cabañas la lógica de IVA y descuento
     const montoBase = parseFloat(payingCabin.info.monto || 0);
     const impuesto = montoBase * 0.13;
     const descuento = method !== 'Tarjeta' ? impuesto : 0;
@@ -461,10 +601,7 @@ function CabinsManager({ cabanas, onUpdate, onCheckout, onPrint }) {
 
     await addDoc(collection(db, 'ventas'), ventaData);
     await onUpdate(payingCabin.docId, { 'info.estadoPago': 'Pagado' });
-    
-    // Imprimir
     onPrint({ ...ventaData, fecha_hora: new Date(), id: 'NUEVA' });
-
     setPayingCabin(null);
     alert("Cobro registrado exitosamente.");
   };
@@ -472,7 +609,6 @@ function CabinsManager({ cabanas, onUpdate, onCheckout, onPrint }) {
   return (
     <div className="card" style={{ padding: '1.5rem', height: '100%', overflowY: 'auto', background: '#f8fafc' }}>
        <h2 style={{ fontSize: '1.2rem', fontWeight: '800', marginBottom: '1.5rem' }}>Gestión de Cabañas</h2>
-       
        {payingCabin && (
            <div style={{position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.5)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:100}}>
                <div className="card" style={{padding:'2rem', width:'300px', textAlign:'center'}}>
@@ -515,7 +651,7 @@ function CabinsManager({ cabanas, onUpdate, onCheckout, onPrint }) {
                     </div>
                     <input type="number" className="input-search" placeholder="Monto Total" value={tempData.monto || ''} onChange={e => handleChange('monto', e.target.value)} />
                     <div style={{display:'flex', gap:'5px', marginTop:'5px'}}>
-                      <button className="btn btn-primary" onClick={() => saveEdit(c.docId)} style={{flex:1}}><Save size={16}/> Guardar</button>
+                      <button className="btn btn-primary" onClick={() => saveEdit(c.docId, c.info)} style={{flex:1}}><Save size={16}/> Guardar</button>
                       <button className="btn btn-outline" onClick={() => setEditingId(null)} style={{flex:1}}>Cancelar</button>
                     </div>
                   </div>
@@ -526,9 +662,7 @@ function CabinsManager({ cabanas, onUpdate, onCheckout, onPrint }) {
                         <div>👤 <b>{c.info.uesped}</b> ({c.info.origen})</div>
                         <div>📅 {c.info.entrada} al {c.info.salida}</div>
                         <div>💰 {formatColones(c.info.monto)} 
-                          <span style={{marginLeft:5, fontWeight:'bold', color: isPaid ? 'green' : 'red'}}>
-                             ({isPaid ? 'PAGADO' : 'PENDIENTE'})
-                          </span>
+                          <span style={{marginLeft:5, fontWeight:'bold', color: isPaid ? 'green' : 'red'}}>({isPaid ? 'PAGADO' : 'PENDIENTE'})</span>
                         </div>
                         <div style={{display:'grid', gridTemplateColumns: '1fr 1fr', gap:'5px', marginTop:'1rem'}}>
                            <button className="btn btn-outline" onClick={() => startEdit(c)}><Edit size={14}/> Editar</button>
@@ -556,19 +690,22 @@ function CabinsManager({ cabanas, onUpdate, onCheckout, onPrint }) {
   )
 }
 
-function POSInterface({ table, menu, cabanas, onUpdateTable, onCloseOrder, onBack }) {
+function POSInterface({ table, menu, cabanas, onUpdateTable, onCloseOrder, onPartialAmount, onBack }) {
   const [cat, setCat] = useState(null);
   const [search, setSearch] = useState('');
   const [showCabinSelector, setShowCabinSelector] = useState(false); 
   const [isSplitMode, setIsSplitMode] = useState(false);
   const [selectedForSplit, setSelectedForSplit] = useState([]); 
+  const [showMontoPanel, setShowMontoPanel] = useState(false);
+  const [montoInput, setMontoInput] = useState('');
 
   const categories = [...new Set(menu.map(i => i.category))];
   
   const grouped = {};
   (table.items || []).forEach(i => {
-    const key = `${i.id}-${i.price}`;
-    if(!grouped[key]) grouped[key] = { ...i, qty: 0, ids: [] };
+    const estado = i.estadoCocina || 'Nuevo';
+    const key = `${i.id}-${i.price}-${estado}`;
+    if(!grouped[key]) grouped[key] = { ...i, qty: 0, ids: [], estadoCocina: estado };
     grouped[key].qty++;
     grouped[key].ids.push(i.instanceId);
   });
@@ -578,10 +715,18 @@ function POSInterface({ table, menu, cabanas, onUpdateTable, onCloseOrder, onBac
     ? (table.items || []).filter(i => selectedForSplit.includes(i.instanceId))
     : (table.items || []);
 
-  const subtotal = itemsToCalc.reduce((s, i) => s + (Number(i.price) || 0), 0);
+  const montoYaCobrado = Number(table.subtotalPagado) || 0;
+  const subtotalBruto = itemsToCalc.reduce((s, i) => s + (Number(i.price) || 0), 0);
+  const subtotal = isSplitMode ? subtotalBruto : Math.max(0, subtotalBruto - montoYaCobrado);
   const tax = subtotal * 0.13;
   const discount = table.payment !== 'Tarjeta' ? tax : 0;
   const total = subtotal + tax - discount;
+
+  const subtotalTotalCuenta = (table.items || []).reduce((s, i) => s + (Number(i.price) || 0), 0);
+  const subtotalPendienteCuenta = Math.max(0, subtotalTotalCuenta - montoYaCobrado);
+  const taxPendiente = subtotalPendienteCuenta * 0.13;
+  const discountPendiente = table.payment !== 'Tarjeta' ? taxPendiente : 0;
+  const totalPendienteCuenta = subtotalPendienteCuenta + taxPendiente - discountPendiente;
 
   const filtered = search 
     ? menu.filter(i => i.name.toLowerCase().includes(search.toLowerCase())) 
@@ -596,13 +741,15 @@ function POSInterface({ table, menu, cabanas, onUpdateTable, onCloseOrder, onBac
           price: amount,
           qty: 1,
           instanceId: Date.now().toString(),
-          linkedCabinId: cabin.docId 
+          linkedCabinId: cabin.docId,
+          estadoCocina: 'No Aplica' 
       };
       onUpdateTable({ ...table, items: [...(table.items || []), newItem] });
       setShowCabinSelector(false);
   };
 
-  const pendingCabins = (cabanas || []).filter(c => c.status === 'Ocupada' && c.info?.estadoPago !== 'Pagado');
+  const cabinsAlreadyInOrder = new Set((table.items || []).filter(i => i.linkedCabinId).map(i => i.linkedCabinId));
+  const pendingCabins = (cabanas || []).filter(c => c.status === 'Ocupada' && c.info?.estadoPago !== 'Pagado' && !cabinsAlreadyInOrder.has(c.docId));
 
   const addItem = (item) => {
     if(isSplitMode) return alert("Sal del modo Dividir para agregar items");
@@ -612,13 +759,13 @@ function POSInterface({ table, menu, cabanas, onUpdateTable, onCloseOrder, onBac
       if(!p) return;
       price = parseFloat(p) || 0;
     }
-    const newItem = { ...item, price, instanceId: Date.now() + Math.random().toString() };
+    const newItem = { ...item, price, instanceId: Date.now() + Math.random().toString(), estadoCocina: 'Nuevo' };
     onUpdateTable({ ...table, items: [...(table.items || []), newItem] });
   };
 
   const increaseQty = (groupItem) => {
     if(isSplitMode) return;
-    const newItem = { ...groupItem, instanceId: Date.now() + Math.random().toString(), qty: 1, ids: [] }; 
+    const newItem = { ...groupItem, instanceId: Date.now() + Math.random().toString(), qty: 1, ids: [], estadoCocina: groupItem.estadoCocina }; 
     onUpdateTable({ ...table, items: [...(table.items || []), newItem] });
   };
 
@@ -657,12 +804,30 @@ function POSInterface({ table, menu, cabanas, onUpdateTable, onCloseOrder, onBac
   const handlePay = () => {
     if (isSplitMode) {
       if(selectedForSplit.length === 0) return alert("Selecciona productos para cobrar");
-      if(!window.confirm(`¿Cobrar ₡${formatColones(total)} a la subcuenta actual?`)) return;
+      if(!window.confirm(`¿Cobrar ${formatColones(total)} a la subcuenta actual?`)) return;
       onCloseOrder(table, itemsToCalc, table.payment); 
       setSelectedForSplit([]); 
     } else {
       if(!window.confirm('¿Cerrar cuenta completa?')) return;
       onCloseOrder(table, null, table.payment); 
+    }
+  };
+
+  const handleSendToKitchen = () => {
+    let hasNewItems = false;
+    const updatedItems = (table.items || []).map(item => {
+      if (item.category !== 'Hospedaje' && (!item.estadoCocina || item.estadoCocina === 'Nuevo')) {
+        hasNewItems = true;
+        return { ...item, estadoCocina: 'Pendiente' };
+      }
+      return item;
+    });
+
+    if (hasNewItems) {
+      onUpdateTable({ ...table, items: updatedItems });
+      alert('¡Comanda enviada a la cocina!');
+    } else {
+      alert('No hay productos nuevos para enviar a cocina.');
     }
   };
 
@@ -675,13 +840,14 @@ function POSInterface({ table, menu, cabanas, onUpdateTable, onCloseOrder, onBac
              <button className="btn-icon" onClick={onBack}><ArrowLeft size={20} /></button>
              <h2 style={{ fontSize: '1.1rem', fontWeight: 'bold', margin: 0 }}>{table.name}</h2>
           </div>
-          <button 
-            className={`btn ${isSplitMode ? 'btn-primary' : 'btn-outline'}`} 
-            onClick={() => { setIsSplitMode(!isSplitMode); setSelectedForSplit([]); }}
-            title="Dividir Cuenta"
-          >
-            <Users size={16} /> {isSplitMode ? 'Cancelar División' : 'Dividir Cuenta'}
-          </button>
+          <div style={{display:'flex', gap:'8px'}}>
+            <button className={`btn ${showMontoPanel ? 'btn-primary' : 'btn-outline'}`} onClick={() => { setShowMontoPanel(!showMontoPanel); setIsSplitMode(false); setSelectedForSplit([]); }}>
+              <Banknote size={16} /> Cobro Libre
+            </button>
+            <button className={`btn ${isSplitMode ? 'btn-primary' : 'btn-outline'}`} onClick={() => { setIsSplitMode(!isSplitMode); setSelectedForSplit([]); setShowMontoPanel(false); }}>
+              <Users size={16} /> {isSplitMode ? 'Cancelar División' : 'Dividir Cuenta'}
+            </button>
+          </div>
         </div>
 
         <div className="order-items">
@@ -693,7 +859,7 @@ function POSInterface({ table, menu, cabanas, onUpdateTable, onCloseOrder, onBac
             const isPartiallySelected = qtySelected > 0 && !isFullySelected;
 
             return (
-            <div key={`${item.id}-${item.price}`} 
+            <div key={`${item.id}-${item.price}-${item.estadoCocina}`} 
                  className={`order-item ${isSplitMode ? 'split-selectable' : ''}`}
                  style={{ 
                     borderLeft: isFullySelected ? '4px solid var(--primary)' : isPartiallySelected ? '4px solid orange' : '4px solid transparent',
@@ -716,15 +882,17 @@ function POSInterface({ table, menu, cabanas, onUpdateTable, onCloseOrder, onBac
                 )}
 
                 <div style={{ overflow: 'hidden' }}>
-                  <div style={{ fontWeight: 600, fontSize: '0.9rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.name}</div>
+                  <div style={{ fontWeight: 600, fontSize: '0.9rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {item.name}
+                    {item.estadoCocina === 'Pendiente' && <span className="badge-status status-pendiente">En cocina</span>}
+                    {item.estadoCocina === 'Listo' && <span className="badge-status status-listo">Listo</span>}
+                  </div>
                   <div className="text-muted" style={{ fontSize: '0.8rem' }}>{formatColones(item.price)}</div>
                 </div>
               </div>
 
               <div className="flex-center" style={{ gap: '10px' }}>
-                <span style={{ fontWeight: 'bold', fontSize: '0.9rem' }}>
-                    {formatColones(item.price * (isSplitMode ? qtySelected : item.qty))}
-                </span>
+                <span style={{ fontWeight: 'bold', fontSize: '0.9rem' }}>{formatColones(item.price * (isSplitMode ? qtySelected : item.qty))}</span>
                 {!isSplitMode && (
                   <button className="btn-icon" style={{ color: '#94a3b8' }} onClick={(e) => { e.stopPropagation(); removeLine(item); }}>
                     <Trash2 size={16} />
@@ -739,52 +907,42 @@ function POSInterface({ table, menu, cabanas, onUpdateTable, onCloseOrder, onBac
         <div className="order-summary">
           <div className="payment-selector">
             {['Efectivo', 'SINPE', 'Tarjeta'].map(m => (
-              <button key={m} className={`payment-btn ${table.payment === m ? 'active' : ''}`} 
-                onClick={() => onUpdateTable({ ...table, payment: m })}>
-                {m}
-              </button>
+              <button key={m} className={`payment-btn ${table.payment === m ? 'active' : ''}`} onClick={() => onUpdateTable({ ...table, payment: m })}>{m}</button>
             ))}
           </div>
 
           <div style={{ display: 'grid', gap: '0.25rem', fontSize: '0.9rem' }}>
-            {isSplitMode && <div style={{textAlign:'center', fontWeight:'bold', color:'orange', marginBottom:'5px'}}>Resumen Subcuenta</div>}
-            
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span className="text-muted">Subtotal</span>
-              <b>{formatColones(subtotal)}</b>
+              <span className="text-muted">Subtotal</span><b>{formatColones(subtotal)}</b>
             </div>
-            
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span className="text-muted">Impuesto (13%)</span>
-              <div style={{ textAlign: 'right' }}>
-                <b>{formatColones(tax)}</b>
-              </div>
+              <span className="text-muted">Impuesto (13%)</span><div style={{ textAlign: 'right' }}><b>{formatColones(tax)}</b></div>
             </div>
-
             {discount > 0 && (
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span className="text-muted">Descuento ({table.payment})</span>
-                <div style={{ textAlign: 'right', color: 'red' }}>
-                  <b>-{formatColones(discount)}</b>
-                </div>
+                <span className="text-muted">Descuento ({table.payment})</span><div style={{ textAlign: 'right', color: 'red' }}><b>-{formatColones(discount)}</b></div>
               </div>
             )}
-
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '1.2rem', marginTop: '0.5rem', borderTop: '2px solid var(--border)', paddingTop: '0.5rem' }}>
-              <span>Total {isSplitMode ? '(Parcial)' : ''}</span>
-              <b style={{ color: 'var(--primary)' }}>{formatColones(total)}</b>
+              <span>Total {isSplitMode ? '(Parcial)' : ''}</span><b style={{ color: 'var(--primary)' }}>{formatColones(total)}</b>
             </div>
           </div>
           
-          <button className="btn btn-primary" style={{ width: '100%', marginTop: '0.75rem', justifyContent: 'center', padding: '12px' }} 
-            onClick={handlePay}>
-            {isSplitMode ? 'COBRAR SELECCIÓN' : 'COBRAR TODO'}
-          </button>
+          <div style={{ display: 'flex', gap: '10px', marginTop: '1rem' }}>
+             {!isSplitMode && (
+               <button className="btn" style={{ flex: 1, justifyContent: 'center', padding: '12px', background: '#fffbeb', border: '1px solid #f59e0b', color: '#d97706' }} onClick={handleSendToKitchen}>
+                 <ChefHat size={18} /> A COCINA
+               </button>
+             )}
+             <button className="btn btn-primary" style={{ flex: 1, justifyContent: 'center', padding: '12px' }} onClick={handlePay}>
+               {isSplitMode ? 'COBRAR SELECCIÓN' : 'COBRAR TODO'}
+             </button>
+          </div>
         </div>
       </div>
 
       {/* RIGHT: MENU */}
-      <div className="card" style={{ padding: '1rem', display: 'flex', flexDirection: 'column', background: '#f8fafc', opacity: isSplitMode ? 0.5 : 1, pointerEvents: isSplitMode ? 'none' : 'auto' }}>
+      <div className="card" style={{ padding: '1rem', display: 'flex', flexDirection: 'column', background: '#f8fafc', opacity: (isSplitMode || showMontoPanel) ? 0.5 : 1, pointerEvents: (isSplitMode || showMontoPanel) ? 'none' : 'auto' }}>
         
         {showCabinSelector && (
              <div style={{position:'absolute', top:0, left:0, right:0, bottom:0, background:'white', zIndex:50, padding:'1rem', overflowY:'auto', borderRadius:'8px'}}>
@@ -809,18 +967,10 @@ function POSInterface({ table, menu, cabanas, onUpdateTable, onCloseOrder, onBac
         )}
 
         <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
-          <button 
-             className="btn btn-outline" 
-             title="Cargar Cabaña"
-             onClick={() => setShowCabinSelector(true)}
-             style={{color: 'var(--primary)', borderColor: 'var(--primary)', padding:'0 10px'}}
-          >
+          <button className="btn btn-outline" title="Cargar Cabaña" onClick={() => setShowCabinSelector(true)} style={{color: 'var(--primary)', borderColor: 'var(--primary)', padding:'0 10px'}}>
              <Tent size={18} />
           </button>
-
-          {cat && !search && (
-            <button className="btn btn-outline" onClick={() => setCat(null)}><ChevronLeft size={16} /></button>
-          )}
+          {cat && !search && <button className="btn btn-outline" onClick={() => setCat(null)}><ChevronLeft size={16} /></button>}
           <div style={{ position: 'relative', flex: 1 }}>
             <Search size={16} style={{ position: 'absolute', left: 10, top: 12, color: '#94a3b8' }} />
             <input className="input-search" style={{ paddingLeft: '34px' }} placeholder="Buscar..." value={search} onChange={e => { setSearch(e.target.value); setCat(null); }} />
@@ -880,18 +1030,13 @@ function HistoryManager({ history, onPrint }) {
   });
 
   const dayTotal = filteredHistory.reduce((sum, item) => sum + (Number(item.total_final) || 0), 0);
-
-  // Cálculos para desglose en el dashboard del Historial
   const totalEfectivo = filteredHistory.filter(h => h.medio_pago === 'Efectivo').reduce((s, h) => s + (Number(h.total_final) || 0), 0);
   const totalSinpe = filteredHistory.filter(h => h.medio_pago === 'SINPE').reduce((s, h) => s + (Number(h.total_final) || 0), 0);
   const totalTarjeta = filteredHistory.filter(h => h.medio_pago === 'Tarjeta').reduce((s, h) => s + (Number(h.total_final) || 0), 0);
   const totalVendido = dayTotal;
 
-  // --- LOGICA REPORTE CSV CON DESGLOSE ---
   const downloadDailyReport = () => {
     if (filteredHistory.length === 0) return alert("No hay ventas en la fecha seleccionada.");
-
-    // Calcular desglose por tipo de pago
     const stats = { Efectivo: 0, SINPE: 0, Tarjeta: 0, Otro: 0 };
     filteredHistory.forEach(h => {
         const metodo = h.medio_pago || 'Otro';
@@ -901,65 +1046,42 @@ function HistoryManager({ history, onPrint }) {
     });
 
     let csv = "REPORTE DIARIO DE VENTAS\n";
-    csv += `Fecha,${selectedDate}\n`;
-    csv += `Generado el,${new Date().toLocaleString()}\n`;
-    csv += `Total Operaciones,${filteredHistory.length}\n`;
-    csv += `MONTO TOTAL DEL DIA,${dayTotal}\n\n`;
-    
-    // Agregamos el desglose al CSV
+    csv += `Fecha,${selectedDate}\nGenerado el,${new Date().toLocaleString()}\nTotal Operaciones,${filteredHistory.length}\nMONTO TOTAL DEL DIA,${dayTotal}\n\n`;
     csv += "DESGLOSE POR METODO DE PAGO\n";
-    csv += `Efectivo,${stats.Efectivo}\n`;
-    csv += `SINPE,${stats.SINPE}\n`;
-    csv += `Tarjeta,${stats.Tarjeta}\n\n`;
-
-    csv += "========================================\n\n";
-    csv += "DETALLE DE OPERACIONES\n";
+    csv += `Efectivo,${stats.Efectivo}\nSINPE,${stats.SINPE}\nTarjeta,${stats.Tarjeta}\n\n`;
+    csv += "========================================\n\nDETALLE DE OPERACIONES\n";
 
     filteredHistory.forEach((sale, index) => {
       const time = getSafeDate(sale.fecha_hora).toLocaleTimeString();
-      csv += `VENTA #${index + 1} | Hora: ${time} | ${sale.mesaNombre}\n`;
-      csv += `Metodo Pago: ${sale.medio_pago}\n`;
-      csv += `Producto,Cantidad,Precio Unit,Subtotal\n`;
-
+      csv += `VENTA #${index + 1} | Hora: ${time} | ${sale.mesaNombre}\nMetodo Pago: ${sale.medio_pago}\nProducto,Cantidad,Precio Unit,Subtotal\n`;
       const grouped = {};
       (sale.items || []).forEach(i => {
         const key = `${i.name}-${i.price}`;
         if (!grouped[key]) grouped[key] = { name: i.name, price: i.price, qty: 0 };
         grouped[key].qty += (i.qty || 1); 
       });
-
       Object.values(grouped).forEach(item => {
         csv += `"${item.name}",${item.qty},${item.price},${item.price * item.qty}\n`;
       });
-
-      csv += `,,,Total Venta: ${sale.total_final}\n`;
-      csv += "----------------------------------------\n";
+      csv += `,,,Total Venta: ${sale.total_final}\n----------------------------------------\n`;
     });
 
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement("a");
-    const url = URL.createObjectURL(blob);
-    link.setAttribute("href", url);
-    link.setAttribute("download", `Reporte_Diario_${selectedDate}.csv`);
-    document.body.appendChild(link);
+    link.href = URL.createObjectURL(blob);
+    link.download = `Reporte_Diario_${selectedDate}.csv`;
     link.click();
-    document.body.removeChild(link);
   };
 
   const downloadSingleInvoice = (saleData) => {
-    let csvContent = "data:text/csv;charset=utf-8,";
-    csvContent += `Empresa,Canto del Bosque\nFecha,${getSafeDate(saleData.fecha_hora).toLocaleString()}\nMesa,${saleData.mesaNombre}\nPago,${saleData.medio_pago}\n\nProducto,Cantidad,Precio,Subtotal\n`;
-    
+    let csvContent = "data:text/csv;charset=utf-8,Empresa,Canto del Bosque\nFecha," + getSafeDate(saleData.fecha_hora).toLocaleString() + "\nMesa," + saleData.mesaNombre + "\nPago," + saleData.medio_pago + "\n\nProducto,Cantidad,Precio,Subtotal\n";
     const grouped = {};
     saleData.items.forEach(i => {
       const key = `${i.name}-${i.price}`;
       if (!grouped[key]) grouped[key] = { name: i.name, price: i.price, qty: 0 };
       grouped[key].qty += (i.qty || 1);
     });
-
-    Object.values(grouped).forEach(item => {
-      csvContent += `"${item.name}",${item.qty},${item.price},${item.price * item.qty}\n`;
-    });
+    Object.values(grouped).forEach(item => { csvContent += `"${item.name}",${item.qty},${item.price},${item.price * item.qty}\n`; });
     csvContent += `\n,,TOTAL,${saleData.total_final}\n`;
 
     const encodedUri = encodeURI(csvContent);
@@ -971,83 +1093,45 @@ function HistoryManager({ history, onPrint }) {
 
   return (
     <div className="card" style={{ padding: '1rem', height: '100%', display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
-      
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '10px' }}>
-        <div>
-           <h2 style={{fontSize:'1.2rem', fontWeight:'800', margin:0}}>Historial de Ventas</h2>
-        </div>
-
+        <h2 style={{fontSize:'1.2rem', fontWeight:'800', margin:0}}>Historial de Ventas</h2>
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-          <div style={{position:'relative'}}>
-             <input type="date" className="input-search" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} style={{paddingRight: '10px'}} />
-          </div>
-          <button className="btn btn-primary" onClick={downloadDailyReport} title="Descargar reporte completo de este día">
-            <Archive size={18} /> Descargar Día
-          </button>
+          <input type="date" className="input-search" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} style={{paddingRight: '10px'}} />
+          <button className="btn btn-primary" onClick={downloadDailyReport} title="Descargar reporte completo de este día"><Archive size={18} /> Descargar Día</button>
         </div>
       </div>
 
-      {/* TARJETAS DE DESGLOSE */}
       <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
         <div style={{ padding: '1rem', flex: 1, background: '#f1f5f9', borderRadius: '8px', border: '1px solid #e2e8f0', minWidth: '120px' }}>
-          <div style={{ fontSize: '0.85rem', color: '#64748b' }}>Total Vendido</div>
-          <div style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{formatColones(totalVendido)}</div>
+          <div style={{ fontSize: '0.85rem', color: '#64748b' }}>Total Vendido</div><div style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{formatColones(totalVendido)}</div>
         </div>
         <div style={{ padding: '1rem', flex: 1, background: '#f8fafc', borderRadius: '8px', borderLeft: '4px solid #15803d', minWidth: '120px' }}>
-          <div style={{ fontSize: '0.85rem', color: '#64748b' }}>Efectivo</div>
-          <div style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{formatColones(totalEfectivo)}</div>
+          <div style={{ fontSize: '0.85rem', color: '#64748b' }}>Efectivo</div><div style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{formatColones(totalEfectivo)}</div>
         </div>
         <div style={{ padding: '1rem', flex: 1, background: '#f8fafc', borderRadius: '8px', borderLeft: '4px solid #3b82f6', minWidth: '120px' }}>
-          <div style={{ fontSize: '0.85rem', color: '#64748b' }}>SINPE</div>
-          <div style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{formatColones(totalSinpe)}</div>
+          <div style={{ fontSize: '0.85rem', color: '#64748b' }}>SINPE</div><div style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{formatColones(totalSinpe)}</div>
         </div>
         <div style={{ padding: '1rem', flex: 1, background: '#f8fafc', borderRadius: '8px', borderLeft: '4px solid #f59e0b', minWidth: '120px' }}>
-          <div style={{ fontSize: '0.85rem', color: '#64748b' }}>Tarjeta</div>
-          <div style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{formatColones(totalTarjeta)}</div>
+          <div style={{ fontSize: '0.85rem', color: '#64748b' }}>Tarjeta</div><div style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{formatColones(totalTarjeta)}</div>
         </div>
       </div>
       
       <div className="table-responsive" style={{ flex: 1, border: '1px solid var(--border)', borderRadius: '8px' }}>
         <table className="history-table">
-          <thead>
-            <tr style={{background: '#f8fafc'}}>
-              <th>Hora</th>
-              <th>Mesa/Origen</th>
-              <th>Items</th>
-              <th>Total</th>
-              <th style={{textAlign:'center'}}>Acciones</th>
-            </tr>
-          </thead>
+          <thead><tr style={{background: '#f8fafc'}}><th>Hora</th><th>Mesa/Origen</th><th>Items</th><th>Total</th><th style={{textAlign:'center'}}>Acciones</th></tr></thead>
           <tbody>
             {filteredHistory.length === 0 ? (
-              <tr>
-                <td colSpan="5" style={{textAlign:'center', padding:'2rem', color:'#94a3b8'}}>
-                  No hay ventas registradas para el <b>{selectedDate}</b>
-                </td>
-              </tr>
+              <tr><td colSpan="5" style={{textAlign:'center', padding:'2rem', color:'#94a3b8'}}>No hay ventas registradas para el <b>{selectedDate}</b></td></tr>
             ) : (
               filteredHistory.map(h => (
                 <tr key={h.id}>
-                  <td>
-                    {getSafeDate(h.fecha_hora).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                  </td>
-                  <td>
-                    <div style={{fontWeight:'bold'}}>{h.mesaNombre}</div>
-                    <div className={`badge ${h.medio_pago === 'Tarjeta' ? 'badge-card' : 'badge-cash'}`} style={{fontSize:'0.7rem', display:'inline-block', marginTop:'2px'}}>
-                      {h.medio_pago}
-                    </div>
-                  </td>
-                  <td style={{fontSize:'0.85rem', maxWidth:'200px', color:'var(--text-muted)'}}>
-                     {(h.items || []).length} items
-                  </td>
+                  <td>{getSafeDate(h.fecha_hora).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</td>
+                  <td><div style={{fontWeight:'bold'}}>{h.mesaNombre}</div><div className={`badge ${h.medio_pago === 'Tarjeta' ? 'badge-card' : 'badge-cash'}`} style={{fontSize:'0.7rem', display:'inline-block', marginTop:'2px'}}>{h.medio_pago}</div></td>
+                  <td style={{fontSize:'0.85rem', maxWidth:'200px', color:'var(--text-muted)'}}>{(h.items || []).length} items</td>
                   <td style={{ fontWeight: 'bold' }}>{formatColones(h.total_final)}</td>
                   <td style={{ textAlign: 'center', display: 'flex', gap: '5px', justifyContent: 'center' }}>
-                    <button className="btn-icon" onClick={() => downloadSingleInvoice(h)} title="Descargar CSV">
-                      <FileText size={18} />
-                    </button>
-                    <button className="btn-icon" onClick={() => onPrint(h)} title="Imprimir Ticket">
-                      <Printer size={18} />
-                    </button>
+                    <button className="btn-icon" onClick={() => downloadSingleInvoice(h)} title="Descargar CSV"><FileText size={18} /></button>
+                    <button className="btn-icon" onClick={() => onPrint(h)} title="Imprimir Ticket"><Printer size={18} /></button>
                   </td>
                 </tr>
               ))
@@ -1059,71 +1143,160 @@ function HistoryManager({ history, onPrint }) {
   );
 }
 
+function ReportsManager() {
+  const getCurrentMonth = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  };
+
+  const [selectedMonth, setSelectedMonth] = useState(getCurrentMonth());
+  const [ventasMes, setVentasMes] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [rankBy, setRankBy] = useState('monto');
+
+  useEffect(() => {
+    setLoading(true);
+    setError(null);
+    const [year, month] = selectedMonth.split('-').map(Number);
+    const start = new Date(year, month - 1, 1);
+    const end = new Date(year, month, 1); 
+
+    const q = query(collection(db, 'ventas'), where('fecha_hora', '>=', start), where('fecha_hora', '<', end), orderBy('fecha_hora', 'asc'));
+
+    const unsub = onSnapshot(q,
+      (snap) => { setVentasMes(snap.docs.map(d => ({ id: d.id, ...d.data() }))); setLoading(false); },
+      (err) => { console.error(err); setError('Error al cargar reportes.'); setLoading(false); }
+    );
+    return () => unsub();
+  }, [selectedMonth]);
+
+  const getSafeDate = (date) => {
+    if (!date) return new Date();
+    if (date.toDate) return date.toDate();
+    return new Date(date);
+  };
+
+  const totalVendido = ventasMes.reduce((s, v) => s + (Number(v.total_final) || 0), 0);
+  const totalTransacciones = ventasMes.length;
+  const ticketPromedio = totalTransacciones > 0 ? totalVendido / totalTransacciones : 0;
+
+  const porMetodo = { Efectivo: 0, SINPE: 0, Tarjeta: 0 };
+  ventasMes.forEach(v => {
+    const m = v.medio_pago;
+    if (porMetodo[m] !== undefined) porMetodo[m] += Number(v.total_final) || 0;
+  });
+
+  const [reportYear, reportMonth] = selectedMonth.split('-').map(Number);
+  const diasEnMes = new Date(reportYear, reportMonth, 0).getDate();
+  const porDia = Array.from({ length: diasEnMes }, (_, i) => ({ dia: i + 1, total: 0 }));
+  ventasMes.forEach(v => {
+    const dayIdx = getSafeDate(v.fecha_hora).getDate() - 1;
+    if (porDia[dayIdx]) porDia[dayIdx].total += Number(v.total_final) || 0;
+  });
+  const maxDia = Math.max(1, ...porDia.map(d => d.total));
+
+  const productosMap = {};
+  ventasMes.forEach(v => {
+    (v.items || []).forEach(item => {
+      const key = item.name;
+      if (!productosMap[key]) productosMap[key] = { name: item.name, qty: 0, monto: 0 };
+      const qty = item.qty || 1;
+      productosMap[key].qty += qty;
+      productosMap[key].monto += (Number(item.price) || 0) * qty;
+    });
+  });
+  const topProductos = Object.values(productosMap).sort((a, b) => rankBy === 'monto' ? b.monto - a.monto : b.qty - a.qty).slice(0, 10);
+  const maxProducto = Math.max(1, ...topProductos.map(p => rankBy === 'monto' ? p.monto : p.qty));
+  const nombreMes = new Date(reportYear, reportMonth - 1, 1).toLocaleDateString('es-CR', { month: 'long', year: 'numeric' });
+
+  return (
+    <div className="card" style={{ padding: '1.5rem', height: '100%', overflowY: 'auto' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '10px' }}>
+        <h2 style={{ fontSize: '1.2rem', fontWeight: '800', margin: 0, textTransform: 'capitalize' }}>Reportes — {nombreMes}</h2>
+        <input type="month" className="input-search" style={{ width: 'auto' }} value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)} />
+      </div>
+
+      {error && <div style={{ background: '#fef2f2', color: '#b91c1c', padding: '1rem', borderRadius: '8px', marginBottom: '1rem' }}>{error}</div>}
+
+      {loading ? <div className="text-muted" style={{ textAlign: 'center', padding: '3rem' }}>Cargando reportes...</div> : totalTransacciones === 0 ? <div className="text-muted" style={{ textAlign: 'center', padding: '3rem' }}>No hay ventas registradas en {nombreMes}.</div> : (
+        <>
+          <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
+            <div style={{ padding: '1rem', flex: 1, background: 'var(--accent)', borderRadius: '8px', minWidth: '140px' }}><div style={{ fontSize: '0.85rem', color: 'var(--primary)' }}>Total del mes</div><div style={{ fontSize: '1.4rem', fontWeight: 'bold', color: 'var(--primary)' }}>{formatColones(totalVendido)}</div></div>
+            <div style={{ padding: '1rem', flex: 1, background: '#f8fafc', borderRadius: '8px', border: '1px solid var(--border)', minWidth: '140px' }}><div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Transacciones</div><div style={{ fontSize: '1.4rem', fontWeight: 'bold' }}>{totalTransacciones}</div></div>
+            <div style={{ padding: '1rem', flex: 1, background: '#f8fafc', borderRadius: '8px', border: '1px solid var(--border)', minWidth: '140px' }}><div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Ticket promedio</div><div style={{ fontSize: '1.4rem', fontWeight: 'bold' }}>{formatColones(ticketPromedio)}</div></div>
+          </div>
+          <div style={{ display: 'flex', gap: '1rem', marginBottom: '2rem', flexWrap: 'wrap' }}>
+            <div style={{ padding: '1rem', flex: 1, background: '#f8fafc', borderRadius: '8px', borderLeft: '4px solid #15803d', minWidth: '140px' }}><div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Efectivo</div><div style={{ fontSize: '1.1rem', fontWeight: 'bold' }}>{formatColones(porMetodo.Efectivo)}</div></div>
+            <div style={{ padding: '1rem', flex: 1, background: '#f8fafc', borderRadius: '8px', borderLeft: '4px solid #a16207', minWidth: '140px' }}><div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>SINPE</div><div style={{ fontSize: '1.1rem', fontWeight: 'bold' }}>{formatColones(porMetodo.SINPE)}</div></div>
+            <div style={{ padding: '1rem', flex: 1, background: '#f8fafc', borderRadius: '8px', borderLeft: '4px solid #3b82f6', minWidth: '140px' }}><div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Tarjeta</div><div style={{ fontSize: '1.1rem', fontWeight: 'bold' }}>{formatColones(porMetodo.Tarjeta)}</div></div>
+          </div>
+          <h3 style={{ fontSize: '1rem', fontWeight: '700', marginBottom: '0.75rem' }}>Ventas por día</h3>
+          <div className="report-daychart">{porDia.map(d => (<div key={d.dia} className="report-daybar" title={`Día ${d.dia}: ${formatColones(d.total)}`}><div className="report-daybar-fill" style={{ height: `${(d.total / maxDia) * 100}%` }} /><span className="report-daybar-label">{d.dia}</span></div>))}</div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '2rem', marginBottom: '0.75rem' }}>
+            <h3 style={{ fontSize: '1rem', fontWeight: '700', margin: 0 }}>Productos más vendidos</h3>
+            <div className="payment-selector" style={{ width: 'auto', marginBottom: 0 }}>
+              <button className={`payment-btn ${rankBy === 'monto' ? 'active' : ''}`} onClick={() => setRankBy('monto')}>Por monto</button>
+              <button className={`payment-btn ${rankBy === 'cantidad' ? 'active' : ''}`} onClick={() => setRankBy('cantidad')}>Por cantidad</button>
+            </div>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+            {topProductos.map(p => {
+              const valor = rankBy === 'monto' ? p.monto : p.qty;
+              return (<div key={p.name} className="report-product-row"><div className="report-product-label"><span>{p.name}</span><span className="text-muted">{p.qty} uds · {formatColones(p.monto)}</span></div><div className="report-product-bar"><div className="report-product-bar-fill" style={{ width: `${(valor / maxProducto) * 100}%` }} /></div></div>);
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function MenuManager({ menu, onAdd, onUpdate, onDelete, onBack }) {
   const [categoria, setCategoria] = React.useState(null);
   const [nombre, setNombre] = React.useState('');
   const [precio, setPrecio] = React.useState('');
   const [mostrarForm, setMostrarForm] = React.useState(false);
+  const [nuevaCategoria, setNuevaCategoria] = React.useState('');
 
   const categorias = [...new Set(menu.map(m => m.category || 'Sin categoría'))];
-
-  const itemsFiltrados = categoria
-    ? menu.filter(m => (m.category || 'Sin categoría') === categoria)
-    : menu;
+  const itemsFiltrados = categoria ? menu.filter(m => (m.category || 'Sin categoría') === categoria) : menu;
 
   return (
     <div className="card" style={{ padding: 16, height: '100%' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-        <h2>Gestión de Menú</h2>
-        <button className="btn btn-outline" onClick={onBack}>← Volver</button>
+        <h2>Gestión de Menú</h2><button className="btn btn-outline" onClick={onBack}>← Volver</button>
       </div>
-
       <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
         <button className="btn btn-outline" onClick={() => setCategoria(null)}>Todas</button>
-        {categorias.map(cat => (
-          <button key={cat} className="btn btn-outline" onClick={() => setCategoria(cat)}>{cat}</button>
-        ))}
+        {categorias.map(cat => (<button key={cat} className="btn btn-outline" onClick={() => setCategoria(cat)}>{cat}</button>))}
       </div>
-
-      <button className="btn btn-primary" onClick={() => setMostrarForm(!mostrarForm)} style={{ marginBottom: 12 }}>
-        {mostrarForm ? 'Cancelar' : 'Añadir producto'}
-      </button>
-
+      <button className="btn btn-primary" onClick={() => setMostrarForm(!mostrarForm)} style={{ marginBottom: 12 }}>{mostrarForm ? 'Cancelar' : 'Añadir producto'}</button>
       {mostrarForm && (
-        <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-          <input className="input-search" placeholder="Nombre" value={nombre} onChange={e => setNombre(e.target.value)} />
-          <input className="input-search" placeholder="Precio" type="number" value={precio} onChange={e => setPrecio(e.target.value)} />
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+          <input className="input-search" placeholder="Nombre" value={nombre} onChange={e => setNombre(e.target.value)} style={{ flex: '1 1 150px' }} />
+          <input className="input-search" placeholder="Precio" type="number" value={precio} onChange={e => setPrecio(e.target.value)} style={{ flex: '1 1 100px' }} />
+          <input className="input-search" placeholder="Categoría nueva" value={nuevaCategoria} onChange={e => setNuevaCategoria(e.target.value)} style={{ flex: '1 1 150px' }} />
           <button className="btn btn-primary" onClick={() => {
-              if (!categoria) return alert('Selecciona una categoría');
-              onAdd(categoria, nombre, precio);
-              setNombre(''); setPrecio(''); setMostrarForm(false);
-            }}>
-            Guardar
-          </button>
+              const categoriaFinal = nuevaCategoria.trim() || categoria;
+              if (!categoriaFinal || !nombre.trim() || !precio) return alert('Datos inválidos');
+              onAdd(categoriaFinal, nombre.trim(), precio);
+              setNombre(''); setPrecio(''); setNuevaCategoria(''); setMostrarForm(false);
+            }}>Guardar</button>
         </div>
       )}
-
       <div style={{ overflowY: 'auto', maxHeight: '60vh' }}>
         {itemsFiltrados.map(item => (
           <div key={item.docId} style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #ddd', padding: 8 }}>
-            <div>
-              <strong>{item.name}</strong>
-              <div style={{ fontSize: 12 }}>{item.category} · ₡{item.price}</div>
-            </div>
+            <div><strong>{item.name}</strong><div style={{ fontSize: 12 }}>{item.category} · ₡{item.price}</div></div>
             <div style={{ display: 'flex', gap: 6 }}>
               <button className="btn btn-outline" onClick={async () => {
                   try {
-                    const nuevoNombre = prompt('Nombre', item.name);
-                    if (nuevoNombre === null) return; 
-                    const nuevoPrecioRaw = prompt('Precio', item.price);
-                    if (nuevoPrecioRaw === null) return;
-                    const nuevoPrecio = Number(nuevoPrecioRaw);
-                    if (nuevoNombre.trim() === '' || Number.isNaN(nuevoPrecio)) return alert('Datos inválidos');
-                    await onUpdate(item.docId, { name: nuevoNombre.trim(), price: nuevoPrecio, category: item.category });
+                    const nuevoNombre = prompt('Nombre', item.name); if (nuevoNombre === null) return; 
+                    const nuevoPrecioRaw = prompt('Precio', item.price); if (nuevoPrecioRaw === null) return;
+                    await onUpdate(item.docId, { name: nuevoNombre.trim(), price: Number(nuevoPrecioRaw), category: item.category });
                   } catch (err) { alert('Error: ' + err.message); }
-                }}>
-                Editar
-              </button>
+                }}>Editar</button>
               <button className="btn btn-danger" onClick={() => onDelete(item.docId)}>X</button>
             </div>
           </div>
@@ -1135,12 +1308,7 @@ function MenuManager({ menu, onAdd, onUpdate, onDelete, onBack }) {
 
 function NavBtn({ icon, label, active, onClick }) {
   return (
-    <button onClick={onClick} style={{
-      display: 'flex', gap: '0.5rem', padding: '0.5rem 1rem', borderRadius: '8px',
-      background: active ? 'var(--accent)' : 'transparent',
-      color: active ? 'var(--primary)' : 'var(--text-muted)',
-      border: 'none', cursor: 'pointer', fontWeight: '600', alignItems: 'center'
-    }}>
+    <button onClick={onClick} style={{ display: 'flex', gap: '0.5rem', padding: '0.5rem 1rem', borderRadius: '8px', background: active ? 'var(--accent)' : 'transparent', color: active ? 'var(--primary)' : 'var(--text-muted)', border: 'none', cursor: 'pointer', fontWeight: '600', alignItems: 'center' }}>
       {icon} {label}
     </button>
   );
