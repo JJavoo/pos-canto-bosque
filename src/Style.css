@@ -71,24 +71,29 @@ body {
   border: none;
   cursor: pointer;
   font-size: 0.9rem;
-  transition: 0.2s;
+  transition: transform 0.1s ease, background-color 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
 }
+.btn:active { transform: scale(0.97); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 
-.btn-primary { background: var(--primary); color: white; }
+.btn-primary { background: var(--primary); color: white; box-shadow: 0 1px 2px rgb(0 0 0 / 0.08); }
 .btn-primary:hover { background: var(--primary-hover); }
 
 .btn-ghost { background: transparent; color: var(--text-muted); }
 .btn-ghost:hover { background: var(--border); color: var(--text-main); }
 
 .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text-main); }
+.btn-outline:hover { border-color: var(--primary); color: var(--primary); background: var(--accent); }
 
 .btn-icon {
   width: 36px; height: 36px;
   display: flex; align-items: center; justify-content: center;
   border-radius: 50%; border: none; cursor: pointer;
   background: transparent; color: var(--text-main);
+  transition: background-color 0.15s ease;
 }
 .btn-icon:hover { background: var(--border); }
+.btn-icon:active { transform: scale(0.92); }
 
 .btn-danger { background: var(--danger); color: white; }
 .btn-danger:hover { background: #dc2626; }
@@ -98,10 +103,15 @@ body {
   display: flex; align-items: center; justify-content: center;
   border-radius: 50%; border: none; cursor: pointer;
   background: rgba(255,255,255,0.9); box-shadow: var(--shadow);
+  transition: background-color 0.15s ease, transform 0.1s ease;
 }
 .btn-icon-mini:hover { background: var(--border); }
+.btn-icon-mini:active { transform: scale(0.9); }
 
 .text-muted { color: var(--text-muted); }
+
+.nav-btn { transition: background-color 0.15s ease, color 0.15s ease; }
+.nav-btn:not(.nav-btn-active):hover { background: var(--border) !important; color: var(--text-main) !important; }
 
 /* Inputs */
 .input-search {
@@ -180,7 +190,9 @@ body {
   display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 0.5rem;
   user-select: none;
+  transition: transform 0.1s ease, box-shadow 0.15s ease, border-color 0.15s ease;
 }
+.cat-card:hover, .prod-card:hover { box-shadow: 0 6px 14px -4px rgb(0 0 0 / 0.12); border-color: var(--primary); }
 .cat-card:active, .prod-card:active { transform: scale(0.96); border-color: var(--primary); }
 
 .prod-name { font-weight: 600; font-size: 0.85rem; line-height: 1.2; }
@@ -367,7 +379,7 @@ body {
     min-width: 650px; 
   }
   
-  div[style*="width: 300px"], div[style*="width:'300px'"], div[style*="width: '300px'"] {
+  .modal-backdrop > .card {
     width: 90% !important;
     padding: 1.5rem !important;
   }
@@ -497,3 +509,70 @@ body {
   font-weight: 600;
   border: 1px solid #fde68a;
 }
+
+/* =========================================
+   🏡 ESTILOS DE CABAÑAS
+   ========================================= */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  backdrop-filter: blur(2px);
+  padding: 1rem;
+}
+
+.cabin-stat-chip {
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.cabin-card {
+  background: white;
+  border-radius: 12px;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-top: 4px solid #94a3b8;
+  box-shadow: var(--shadow);
+  transition: 0.2s;
+}
+.cabin-card:hover {
+  box-shadow: 0 10px 20px -6px rgb(0 0 0 / 0.15);
+  transform: translateY(-1px);
+}
+.cabin-card[data-status="free"] { border-top-color: #94a3b8; }
+.cabin-card[data-status="unpaid"] { border-top-color: #ef4444; }
+.cabin-card[data-status="paid"] { border-top-color: #22c55e; }
+
+.cabin-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.cabin-field-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  margin-bottom: -4px;
+}
+
+.cabin-warning {
+  background: #fffbeb;
+  color: #b45309;
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 4px 8px;
+  border-radius: 6px;
+  display: inline-block;
+  width: fit-content;
+}
+.cabin-warning-danger { background: #fef2f2; color: #b91c1c; }
