@@ -420,7 +420,17 @@ function KitchenManager({ tables, onUpdateTable }) {
       </h2>
       <div className="category-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))' }}>
         {comandasActivas.map(table => {
-          const itemsPendientes = table.items.filter(i => i.estadoCocina === 'Pendiente');
+          const itemsPendientesRaw = table.items.filter(i => i.estadoCocina === 'Pendiente');
+          // Agrupamos por producto+nota para que la cocina vea "3x Casado" en vez de
+          // tres tarjetas separadas de "1x Casado" (una por cada unidad individual).
+          const gruposPendientes = {};
+          itemsPendientesRaw.forEach(i => {
+            const key = `${i.name}-${i.nota || ''}`;
+            if (!gruposPendientes[key]) gruposPendientes[key] = { name: i.name, nota: i.nota, qty: 0, instanceIds: [] };
+            gruposPendientes[key].qty += 1;
+            gruposPendientes[key].instanceIds.push(i.instanceId);
+          });
+          const itemsPendientes = Object.values(gruposPendientes);
           return (
             <div key={table.id} className="comanda-card">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)', paddingBottom: '10px' }}>
@@ -431,14 +441,14 @@ function KitchenManager({ tables, onUpdateTable }) {
               </div>
               
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {itemsPendientes.map(item => (
-                   <div key={item.instanceId} className="comanda-item" style={{alignItems: 'flex-start'}}>
+                {itemsPendientes.map(grupo => (
+                   <div key={`${grupo.name}-${grupo.nota}`} className="comanda-item" style={{alignItems: 'flex-start'}}>
                      <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: 600 }}>1x {item.name}</div>
+                        <div style={{ fontWeight: 600 }}>{grupo.qty}x {grupo.name}</div>
                         {/* AQUI MOSTRAMOS LA NOTA AL CHEF */}
-                        {item.nota && <div className="item-nota">{item.nota}</div>}
+                        {grupo.nota && <div className="item-nota">{grupo.nota}</div>}
                      </div>
-                     <button className="btn-icon" style={{ color: '#059669', background: '#d1fae5', width: '28px', height: '28px', marginTop: '2px' }} onClick={() => marcarItemListo(table, item.instanceId)}>
+                     <button className="btn-icon" style={{ color: '#059669', background: '#d1fae5', width: '28px', height: '28px', marginTop: '2px' }} onClick={() => grupo.instanceIds.forEach(id => marcarItemListo(table, id))}>
                        <Check size={14} />
                      </button>
                    </div>
@@ -455,7 +465,6 @@ function KitchenManager({ tables, onUpdateTable }) {
 function POSInterface({ role, table, menu, cabanas, onUpdateTable, onCloseOrder, onPartialAmount, onBack }) {
   const [cat, setCat] = useState(null);
   const [search, setSearch] = useState('');
-  const [showCabinSelector, setShowCabinSelector] = useState(false); 
   const [isSplitMode, setIsSplitMode] = useState(false);
   const [selectedForSplit, setSelectedForSplit] = useState([]); 
   const [showMontoPanel, setShowMontoPanel] = useState(false);
@@ -690,6 +699,11 @@ function POSInterface({ role, table, menu, cabanas, onUpdateTable, onCloseOrder,
           )}
 
           <div style={{ display: 'grid', gap: '0.25rem', fontSize: '0.9rem' }}>
+            {montoYaCobrado > 0 && !isSplitMode && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', color: '#0369a1', fontSize: '0.8rem', background: '#e0f2fe', padding: '4px 8px', borderRadius: '6px', marginBottom: '4px' }}>
+                <span>Ya abonado a esta cuenta</span><b>{formatColones(montoYaCobrado)}</b>
+              </div>
+            )}
             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span className="text-muted">Subtotal</span><b>{formatColones(subtotal)}</b></div>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span className="text-muted">Impuesto (13%)</span><div style={{ textAlign: 'right' }}><b>{formatColones(tax)}</b></div></div>
             {discount > 0 && (
@@ -1018,7 +1032,12 @@ function ReportsManager() {
   ventasMes.forEach(v => { const dayIdx = getSafeDate(v.fecha_hora).getDate() - 1; if (porDia[dayIdx]) porDia[dayIdx].total += Number(v.total_final) || 0; });
   const maxDia = Math.max(1, ...porDia.map(d => d.total));
   const productosMap = {};
-  ventasMes.forEach(v => { (v.items || []).forEach(item => { const key = item.name; if (!productosMap[key]) productosMap[key] = { name: item.name, qty: 0, monto: 0 }; const qty = item.qty || 1; productosMap[key].qty += qty; productosMap[key].monto += (Number(item.price) || 0) * qty; }); });
+  ventasMes.forEach(v => {
+    // Los "Abono a la cuenta" y "Alquiler cabaña" no son productos del menú,
+    // así que los excluimos para no ensuciar el ranking de productos más vendidos.
+    if (v.tipo === 'Abono' || v.tipo === 'Hospedaje') return;
+    (v.items || []).forEach(item => { const key = item.name; if (!productosMap[key]) productosMap[key] = { name: item.name, qty: 0, monto: 0 }; const qty = item.qty || 1; productosMap[key].qty += qty; productosMap[key].monto += (Number(item.price) || 0) * qty; });
+  });
   const topProductos = Object.values(productosMap).sort((a, b) => rankBy === 'monto' ? b.monto - a.monto : b.qty - a.qty).slice(0, 10);
   const maxProducto = Math.max(1, ...topProductos.map(p => rankBy === 'monto' ? p.monto : p.qty));
   const nombreMes = new Date(reportYear, reportMonth - 1, 1).toLocaleDateString('es-CR', { month: 'long', year: 'numeric' });
@@ -1099,7 +1118,7 @@ function MenuManager({ menu, onAdd, onUpdate, onDelete, onBack }) {
       <div style={{ overflowY: 'auto', maxHeight: '60vh' }}>
         {itemsFiltrados.map(item => (
           <div key={item.docId} style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #ddd', padding: 8 }}>
-            <div><strong>{item.name}</strong><div style={{ fontSize: 12 }}>{item.category} · ₡{item.price}</div></div>
+            <div><strong>{item.name}</strong><div style={{ fontSize: 12 }}>{item.category} · {formatColones(item.price)}</div></div>
             <div style={{ display: 'flex', gap: 6 }}>
               <button className="btn btn-outline" onClick={async () => {
                   try {
