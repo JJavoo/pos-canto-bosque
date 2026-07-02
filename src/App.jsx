@@ -22,11 +22,22 @@ const CATEGORY_ICONS = {
   'Bebidas Naturales': '🥤', Refrescos: '🧊', Especial: '✨',
 };
 
-// Categorías que le pertenecen al Bartender (tragos, bebidas, cócteles, postres).
-// Todo lo que NO esté en esta lista (comida y frescos naturales) va a la Cocina por defecto,
-// incluyendo cualquier categoría nueva que se cree a futuro en el Menú.
-const BARTENDER_CATEGORIES = ['Cócteles', 'Licores', 'Cervezas', 'Vinos', 'Refrescos', 'Postres'];
-const getStation = (category) => BARTENDER_CATEGORIES.includes(category) ? 'bartender' : 'cocina';
+// Categorías que POR DEFECTO le pertenecen al Bartender, usado solo como respaldo
+// para productos viejos que todavía no tienen el campo "station" asignado explícitamente
+// en el Menú. Normalizamos (sin tildes/mayúsculas/espacios) para que funcione sin importar
+// cómo esté escrita la categoría exactamente.
+const normalizeText = (s) => (s || '').toString().trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+const BARTENDER_CATEGORIES_FALLBACK = ['cocteles', 'licores', 'cervezas', 'vinos', 'refrescos', 'postres'];
+const getStationFromCategory = (category) => BARTENDER_CATEGORIES_FALLBACK.includes(normalizeText(category)) ? 'bartender' : 'cocina';
+
+// Estación real de un producto del MENÚ: usa el campo explícito "station" si existe
+// (configurado desde Gestión de Menú), y si no, cae al respaldo por categoría.
+const getMenuItemStation = (menuItem) => menuItem.station === 'bartender' ? 'bartender' : (menuItem.station === 'cocina' ? 'cocina' : getStationFromCategory(menuItem.category));
+
+// Estación de un producto YA AGREGADO a una cuenta: usa la estación que quedó "estampada"
+// al momento de agregarlo (para que no cambie después si editas el menú), y si es un pedido
+// viejo que no la tiene, cae al mismo respaldo.
+const getOrderItemStation = (orderItem) => orderItem.station === 'bartender' ? 'bartender' : (orderItem.station === 'cocina' ? 'cocina' : getStationFromCategory(orderItem.category));
 
 const formatColones = (val) => {
   const n = Number(val) || 0;
@@ -95,9 +106,9 @@ export default function App() {
   }, [ticketData]);
 
   // --- CRUD MENU ---
-  const addMenuItem = async (category, name, price) => {
+  const addMenuItem = async (category, name, price, station = 'cocina') => {
     try {
-      const ref = await addDoc(collection(db, 'menu'), { name, category, price: Number(price), createdAt: serverTimestamp() });
+      const ref = await addDoc(collection(db, 'menu'), { name, category, price: Number(price), station, createdAt: serverTimestamp() });
       await setDoc(doc(db, 'menu', ref.id), { id: ref.id }, { merge: true });
       alert('Producto agregado');
     } catch (e) { alert('Error: ' + e.message); }
@@ -247,7 +258,17 @@ export default function App() {
   
   const handleUpdateCabana = async (docId, newData) => await updateDoc(doc(db, 'cabanas', docId), newData);
   const handleCheckoutCabana = async (cabana) => {
-    if(!window.confirm(`¿Finalizar alquiler de ${cabana.name}?`)) return;
+    const estaPagado = cabana.info?.estadoPago === 'Pagado';
+    if (!estaPagado) {
+      const forzar = window.confirm(
+        `⚠️ ${cabana.name} TODAVÍA NO HA SIDO COBRADA (₡${Math.round(cabana.info?.monto || 0)} pendiente).\n\n` +
+        `Si haces check-out ahora, se perderá el registro de este hospedaje sin haberlo cobrado.\n\n` +
+        `Presiona "Aceptar" solo si estás seguro de que ya se cobró por otro medio, o "Cancelar" para volver y cobrar primero.`
+      );
+      if (!forzar) return;
+    } else {
+      if (!window.confirm(`¿Finalizar alquiler de ${cabana.name}?`)) return;
+    }
     await updateDoc(doc(db, 'cabanas', cabana.docId), { status: 'Libre', info: {} });
   };
 
@@ -407,7 +428,7 @@ function TablesManager({ tables, title, onCreate, onOpen, onDelete, onRename }) 
 
 function KitchenManager({ tables, onUpdateTable, station, title, icon, emptyTitle, emptyText, emptyIcon }) {
   // Solo consideramos los items pendientes que le pertenecen a ESTA estación
-  const comandasActivas = tables.filter(t => t.items && t.items.some(i => i.estadoCocina === 'Pendiente' && getStation(i.category) === station));
+  const comandasActivas = tables.filter(t => t.items && t.items.some(i => i.estadoCocina === 'Pendiente' && getOrderItemStation(i) === station));
 
   const marcarItemListo = (table, instanceId) => {
     const newItems = table.items.map(i => i.instanceId === instanceId ? { ...i, estadoCocina: 'Listo' } : i);
@@ -417,7 +438,7 @@ function KitchenManager({ tables, onUpdateTable, station, title, icon, emptyTitl
   const marcarTodoListo = (table) => {
     // Importante: solo marcamos "Listo" los items de ESTA estación, para no completar
     // por accidente pedidos pendientes de la otra estación (ej: cocina no debe cerrar tragos de barra)
-    const newItems = table.items.map(i => (i.estadoCocina === 'Pendiente' && getStation(i.category) === station) ? { ...i, estadoCocina: 'Listo' } : i);
+    const newItems = table.items.map(i => (i.estadoCocina === 'Pendiente' && getOrderItemStation(i) === station) ? { ...i, estadoCocina: 'Listo' } : i);
     onUpdateTable({ ...table, items: newItems });
   };
 
@@ -438,7 +459,7 @@ function KitchenManager({ tables, onUpdateTable, station, title, icon, emptyTitl
       </h2>
       <div className="category-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))' }}>
         {comandasActivas.map(table => {
-          const itemsPendientesRaw = table.items.filter(i => i.estadoCocina === 'Pendiente' && getStation(i.category) === station);
+          const itemsPendientesRaw = table.items.filter(i => i.estadoCocina === 'Pendiente' && getOrderItemStation(i) === station);
           // Agrupamos por producto+nota para que la cocina vea "3x Casado" en vez de
           // tres tarjetas separadas de "1x Casado" (una por cada unidad individual).
           const gruposPendientes = {};
@@ -527,7 +548,7 @@ function POSInterface({ role, table, menu, cabanas, onUpdateTable, onCloseOrder,
       if(!p) return;
       price = parseFloat(p) || 0;
     }
-    const newItem = { ...item, price, instanceId: Date.now() + Math.random().toString(), estadoCocina: 'Nuevo', nota: '' };
+    const newItem = { ...item, price, instanceId: Date.now() + Math.random().toString(), estadoCocina: 'Nuevo', nota: '', station: getMenuItemStation(item) };
     onUpdateTable({ ...table, items: [...(table.items || []), newItem] });
   };
 
@@ -787,33 +808,67 @@ function POSInterface({ role, table, menu, cabanas, onUpdateTable, onCloseOrder,
 }
 
 function CabinsManager({ cabanas, onUpdate, onCheckout, onPrint }) {
-  // ... Código idéntico al de Cabañas (se mantiene intacto, no modificado para ahorrar espacio en la vista. Si requieres el código completo de este componente por un problema visual me avisas, pero funciona igual que en la v2.2)
   const [editingId, setEditingId] = useState(null);
   const [tempData, setTempData] = useState({});
   const [payingCabin, setPayingCabin] = useState(null);
 
-  const startEdit = (c) => { setEditingId(c.docId); setTempData(c.info || {}); };
+  const startEdit = (c) => {
+    setEditingId(c.docId);
+    const info = c.info || {};
+    // Migramos el campo viejo con typo ("uesped") al correcto ("huesped") de forma transparente
+    setTempData({ ...info, huesped: info.huesped || info.uesped || '' });
+  };
+
+  const nightsBetween = (entrada, salida) => {
+    if (!entrada || !salida) return null;
+    const d1 = new Date(entrada + 'T00:00:00');
+    const d2 = new Date(salida + 'T00:00:00');
+    const diff = Math.round((d2 - d1) / 86400000);
+    return diff > 0 ? diff : null;
+  };
+
+  const getUrgencia = (salida, isOccupied) => {
+    if (!isOccupied || !salida) return null;
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const salidaDate = new Date(salida + 'T00:00:00');
+    const diffDays = Math.round((salidaDate - today) / 86400000);
+    if (diffDays < 0) return 'atrasado';
+    if (diffDays === 0) return 'hoy';
+    return null;
+  };
+
   const saveEdit = (docId, originalInfo) => {
+    if (!tempData.huesped || !tempData.huesped.trim()) return alert('Ingresa el nombre del huésped');
+    if (!tempData.monto || Number(tempData.monto) <= 0) return alert('Ingresa un monto válido mayor a ₡0');
+    if (tempData.entrada && tempData.salida && tempData.salida < tempData.entrada) return alert('La fecha de salida no puede ser anterior a la de entrada');
+
+    // Si el monto cambió respecto al original, la deuda ya cobrada podría no cubrir el nuevo total,
+    // así que reiniciamos el estado de pago para evitar que quede marcada como "Pagado" incorrectamente.
     const montoCambio = Number(originalInfo?.monto || 0) !== Number(tempData.monto || 0);
-    const nuevoInfo = montoCambio ? { ...tempData, estadoPago: null } : tempData;
+    const nuevoInfo = { ...tempData };
+    delete nuevoInfo.uesped; // limpiamos el campo viejo para no arrastrar datos duplicados
+    if (montoCambio) nuevoInfo.estadoPago = null;
+
     onUpdate(docId, { info: nuevoInfo, status: 'Ocupada' });
     setEditingId(null);
   };
+
   const handleChange = (field, val) => setTempData(prev => ({ ...prev, [field]: val }));
+
   const handlePayCabin = async (method) => {
-    if(!payingCabin) return;
+    if (!payingCabin) return;
     const montoBase = parseFloat(payingCabin.info.monto || 0);
     const impuesto = montoBase * 0.13;
     const descuento = method !== 'Tarjeta' ? impuesto : 0;
     const total = montoBase + impuesto - descuento;
 
-    if(!window.confirm(`¿Confirmar cobro de ${formatColones(total)} (${method}) para ${payingCabin.name}?`)) return;
+    if (!window.confirm(`¿Confirmar cobro de ${formatColones(total)} (${method}) para ${payingCabin.name}?`)) return;
 
     const ventaData = {
-        fecha_hora: serverTimestamp(), mesaNombre: `HOSPEDAJE - ${payingCabin.name}`,
-        items: [{ name: `Alquiler ${payingCabin.name}`, price: montoBase, qty: 1 }],
-        subtotal: montoBase, impuesto: impuesto, descuento: descuento, total_final: total, medio_pago: method,
-        createdAt: serverTimestamp(), tipo: 'Hospedaje'
+      fecha_hora: serverTimestamp(), mesaNombre: `HOSPEDAJE - ${payingCabin.name}`,
+      items: [{ name: `Alquiler ${payingCabin.name}`, price: montoBase, qty: 1 }],
+      subtotal: montoBase, impuesto: impuesto, descuento: descuento, total_final: total, medio_pago: method,
+      createdAt: serverTimestamp(), tipo: 'Hospedaje'
     };
 
     await addDoc(collection(db, 'ventas'), ventaData);
@@ -822,57 +877,113 @@ function CabinsManager({ cabanas, onUpdate, onCheckout, onPrint }) {
     setPayingCabin(null); alert("Cobro registrado exitosamente.");
   };
 
+  const totalCabanas = cabanas.length;
+  const ocupadas = cabanas.filter(c => c.status === 'Ocupada').length;
+  const libres = totalCabanas - ocupadas;
+  const pendientesCobro = cabanas.filter(c => c.status === 'Ocupada' && c.info?.estadoPago !== 'Pagado').length;
+
   return (
     <div className="card" style={{ padding: '1.5rem', height: '100%', overflowY: 'auto', background: '#f8fafc' }}>
-       <h2 style={{ fontSize: '1.2rem', fontWeight: '800', marginBottom: '1.5rem' }}>Gestión de Cabañas</h2>
-       {payingCabin && (
-           <div style={{position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.5)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:100}}>
-               <div className="card" style={{padding:'2rem', width:'300px', textAlign:'center'}}>
-                   <h3>Cobrar {payingCabin.name}</h3><p className="text-muted">Monto Base: {formatColones(payingCabin.info.monto)}</p>
-                   <div style={{display:'grid', gap:'10px', marginTop:'1rem'}}>
-                       <button className="btn btn-primary" onClick={() => handlePayCabin('Efectivo')}>💵 Efectivo (Desc IVA)</button>
-                       <button className="btn btn-primary" onClick={() => handlePayCabin('SINPE')}>📱 SINPE (Desc IVA)</button>
-                       <button className="btn btn-primary" onClick={() => handlePayCabin('Tarjeta')}>💳 Tarjeta (+13% IVA)</button>
-                       <button className="btn btn-outline" onClick={() => setPayingCabin(null)} style={{marginTop:'10px'}}>Cancelar</button>
-                   </div>
-               </div>
-           </div>
-       )}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '1.5rem' }}>
+        <h2 style={{ fontSize: '1.2rem', fontWeight: '800', margin: 0 }}>🏡 Gestión de Cabañas</h2>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <div className="cabin-stat-chip" style={{ background: '#f0fdf4', color: '#15803d' }}>{libres} libre{libres !== 1 ? 's' : ''}</div>
+          <div className="cabin-stat-chip" style={{ background: '#fef2f2', color: '#b91c1c' }}>{ocupadas} ocupada{ocupadas !== 1 ? 's' : ''}</div>
+          {pendientesCobro > 0 && <div className="cabin-stat-chip" style={{ background: '#fffbeb', color: '#b45309' }}>⚠ {pendientesCobro} sin cobrar</div>}
+        </div>
+      </div>
 
-       <div className="category-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))' }}>
-         {cabanas.map(c => {
-           const isOccupied = c.status === 'Ocupada'; const isEditing = editingId === c.docId; const isPaid = c.info?.estadoPago === 'Pagado';
-           return (
-             <div key={c.docId} className="card" style={{ padding: '1rem', borderTop: `4px solid ${isOccupied ? (isPaid ? '#22c55e' : '#ef4444') : '#94a3b8'}` }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem' }}><div style={{ fontWeight: 'bold', fontSize: '1.1rem' }}>{c.name}</div><div className={`badge ${isOccupied ? 'badge-card' : 'badge-cash'}`}>{c.status}</div></div>
-                {isEditing ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <input className="input-search" placeholder="Huésped" value={tempData.uesped || ''} onChange={e => handleChange('uesped', e.target.value)} />
-                    <select className="input-search" value={tempData.origen || ''} onChange={e => handleChange('origen', e.target.value)}><option value="">Origen...</option><option value="Booking">Booking</option><option value="WhatsApp">WhatsApp</option></select>
-                    <div style={{display:'flex', gap: 5}}><input type="date" className="input-search" value={tempData.entrada || ''} onChange={e => handleChange('entrada', e.target.value)} /><input type="date" className="input-search" value={tempData.salida || ''} onChange={e => handleChange('salida', e.target.value)} /></div>
-                    <input type="number" className="input-search" placeholder="Monto Total" value={tempData.monto || ''} onChange={e => handleChange('monto', e.target.value)} />
-                    <div style={{display:'flex', gap:'5px', marginTop:'5px'}}><button className="btn btn-primary" onClick={() => saveEdit(c.docId, c.info)} style={{flex:1}}><Save size={16}/> Guardar</button><button className="btn btn-outline" onClick={() => setEditingId(null)} style={{flex:1}}>Cancelar</button></div>
+      {payingCabin && (
+        <div className="modal-backdrop" onClick={() => setPayingCabin(null)}>
+          <div className="card" style={{ padding: '2rem', width: '320px', textAlign: 'center' }} onClick={e => e.stopPropagation()}>
+            <h3 style={{ marginTop: 0 }}>Cobrar {payingCabin.name}</h3>
+            <p className="text-muted">Monto Base: {formatColones(payingCabin.info.monto)}</p>
+            <div style={{ display: 'grid', gap: '10px', marginTop: '1rem' }}>
+              <button className="btn btn-primary" onClick={() => handlePayCabin('Efectivo')}>💵 Efectivo (Desc. IVA)</button>
+              <button className="btn btn-primary" onClick={() => handlePayCabin('SINPE')}>📱 SINPE (Desc. IVA)</button>
+              <button className="btn btn-primary" onClick={() => handlePayCabin('Tarjeta')}>💳 Tarjeta (+13% IVA)</button>
+              <button className="btn btn-outline" onClick={() => setPayingCabin(null)} style={{ marginTop: '10px' }}>Cancelar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="category-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '1rem' }}>
+        {cabanas.map(c => {
+          const isOccupied = c.status === 'Ocupada';
+          const isEditing = editingId === c.docId;
+          const isPaid = c.info?.estadoPago === 'Pagado';
+          const huesped = c.info?.huesped || c.info?.uesped || '';
+          const noches = nightsBetween(c.info?.entrada, c.info?.salida);
+          const urgencia = getUrgencia(c.info?.salida, isOccupied);
+
+          return (
+            <div key={c.docId} className="cabin-card" data-status={isOccupied ? (isPaid ? 'paid' : 'unpaid') : 'free'}>
+              <div className="cabin-card-header">
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ fontSize: '1.4rem' }}>{isOccupied ? '🏠' : '🌿'}</span>
+                  <span style={{ fontWeight: 800, fontSize: '1.05rem' }}>{c.name}</span>
+                </div>
+                <div className={`badge ${isOccupied ? (isPaid ? 'badge-cash' : 'badge-sinpe') : 'badge-cash'}`}>
+                  {isOccupied ? (isPaid ? 'Pagado' : 'Pendiente') : 'Libre'}
+                </div>
+              </div>
+
+              {isEditing ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '0.85rem' }}>
+                  <div className="cabin-field-label">Huésped</div>
+                  <input className="input-search" placeholder="Nombre del huésped" value={tempData.huesped || ''} onChange={e => handleChange('huesped', e.target.value)} />
+                  <div className="cabin-field-label">Origen de la reserva</div>
+                  <select className="input-search" value={tempData.origen || ''} onChange={e => handleChange('origen', e.target.value)}>
+                    <option value="">Origen...</option>
+                    <option value="Booking">Booking</option>
+                    <option value="WhatsApp">WhatsApp</option>
+                    <option value="Directo">Directo</option>
+                  </select>
+                  <div className="cabin-field-label">Estadía</div>
+                  <div style={{ display: 'flex', gap: 5 }}>
+                    <input type="date" className="input-search" value={tempData.entrada || ''} onChange={e => handleChange('entrada', e.target.value)} />
+                    <input type="date" className="input-search" value={tempData.salida || ''} onChange={e => handleChange('salida', e.target.value)} />
                   </div>
-                ) : (
-                  <>{isOccupied ? (
-                      <div style={{ fontSize: '0.9rem', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                        <div>👤 <b>{c.info.uesped}</b> ({c.info.origen})</div><div>📅 {c.info.entrada} al {c.info.salida}</div>
-                        <div>💰 {formatColones(c.info.monto)} <span style={{marginLeft:5, fontWeight:'bold', color: isPaid ? 'green' : 'red'}}>({isPaid ? 'PAGADO' : 'PENDIENTE'})</span></div>
-                        <div style={{display:'grid', gridTemplateColumns: '1fr 1fr', gap:'5px', marginTop:'1rem'}}>
-                           <button className="btn btn-outline" onClick={() => startEdit(c)}><Edit size={14}/> Editar</button>
-                           <button className="btn btn-primary" style={{background: '#334155', borderColor:'#334155'}} onClick={() => onCheckout(c)}>Check Out</button>
-                           {!isPaid && (<button className="btn btn-primary" style={{gridColumn: 'span 2', justifyContent:'center', marginTop:'5px', background:'#22c55e', borderColor:'#22c55e'}} onClick={() => setPayingCabin(c)}>💸 Cobrar Ahora</button>)}
-                        </div>
+                  {nightsBetween(tempData.entrada, tempData.salida) && (
+                    <div className="text-muted" style={{ fontSize: '0.8rem' }}>{nightsBetween(tempData.entrada, tempData.salida)} noche(s)</div>
+                  )}
+                  <div className="cabin-field-label">Monto total del hospedaje</div>
+                  <input type="number" className="input-search" placeholder="Monto Total" value={tempData.monto || ''} onChange={e => handleChange('monto', e.target.value)} />
+                  <div style={{ display: 'flex', gap: '5px', marginTop: '5px' }}>
+                    <button className="btn btn-primary" onClick={() => saveEdit(c.docId, c.info)} style={{ flex: 1 }}><Save size={16} /> Guardar</button>
+                    <button className="btn btn-outline" onClick={() => setEditingId(null)} style={{ flex: 1 }}>Cancelar</button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  {isOccupied ? (
+                    <div style={{ fontSize: '0.88rem', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '0.85rem' }}>
+                      <div>👤 <b style={{ color: 'var(--text-main)' }}>{huesped || 'Sin nombre'}</b>{c.info?.origen && ` · ${c.info.origen}`}</div>
+                      <div>📅 {c.info?.entrada || '—'} → {c.info?.salida || '—'} {noches && <span className="text-muted">({noches} noche{noches > 1 ? 's' : ''})</span>}</div>
+                      {urgencia === 'hoy' && <div className="cabin-warning">🔔 Sale hoy</div>}
+                      {urgencia === 'atrasado' && <div className="cabin-warning cabin-warning-danger">⏰ Fecha de salida vencida</div>}
+                      <div style={{ fontWeight: 700, fontSize: '1.05rem', color: 'var(--text-main)', marginTop: '2px' }}>{formatColones(c.info?.monto)}</div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginTop: '0.5rem' }}>
+                        <button className="btn btn-outline" onClick={() => startEdit(c)}><Edit size={14} /> Editar</button>
+                        <button className="btn btn-outline" style={{ color: '#334155', borderColor: '#334155' }} onClick={() => onCheckout(c)}>Check Out</button>
+                        {!isPaid && (<button className="btn btn-primary" style={{ gridColumn: 'span 2', justifyContent: 'center', marginTop: '2px', background: '#22c55e', borderColor: '#22c55e' }} onClick={() => setPayingCabin(c)}>💸 Cobrar Ahora</button>)}
                       </div>
-                    ) : (<div style={{ textAlign: 'center', padding: '1rem 0' }}><div style={{ color: '#cbd5e1', marginBottom: '1rem' }}>Disponible</div><button className="btn btn-primary" style={{width:'100%', justifyContent:'center'}} onClick={() => startEdit(c)}>Registrar Entrada</button></div>)}
-                  </>
-                )}
-             </div>
-           )
-         })}
-       </div>
+                    </div>
+                  ) : (
+                    <div style={{ textAlign: 'center', padding: '1.5rem 0' }}>
+                      <div className="text-muted" style={{ marginBottom: '0.75rem' }}>Disponible para reservar</div>
+                      <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }} onClick={() => startEdit(c)}><Plus size={16} /> Registrar Entrada</button>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
-  )
+  );
 }
 
 function HistoryManager({ history, onPrint }) {
@@ -1106,49 +1217,95 @@ function MenuManager({ menu, onAdd, onUpdate, onDelete, onBack }) {
   const [precio, setPrecio] = React.useState('');
   const [mostrarForm, setMostrarForm] = React.useState(false);
   const [nuevaCategoria, setNuevaCategoria] = React.useState('');
+  const [nuevaEstacion, setNuevaEstacion] = React.useState('cocina');
 
   const categorias = [...new Set(menu.map(m => m.category || 'Sin categoría'))];
   const itemsFiltrados = categoria ? menu.filter(m => (m.category || 'Sin categoría') === categoria) : menu;
 
   return (
-    <div className="card" style={{ padding: 16, height: '100%' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-        <h2>Gestión de Menú</h2><button className="btn btn-outline" onClick={onBack}>← Volver</button>
+    <div className="card" style={{ padding: '1.5rem', height: '100%', overflowY: 'auto' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '10px' }}>
+        <h2 style={{ fontSize: '1.2rem', fontWeight: '800', margin: 0 }}>Gestión de Menú</h2>
+        <button className="btn btn-outline" onClick={onBack}><ArrowLeft size={16} /> Volver</button>
       </div>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-        <button className="btn btn-outline" onClick={() => setCategoria(null)}>Todas</button>
-        {categorias.map(cat => (<button key={cat} className="btn btn-outline" onClick={() => setCategoria(cat)}>{cat}</button>))}
+
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+        <button className={`btn ${!categoria ? 'btn-primary' : 'btn-outline'}`} onClick={() => setCategoria(null)}>Todas ({menu.length})</button>
+        {categorias.map(cat => (
+          <button key={cat} className={`btn ${categoria === cat ? 'btn-primary' : 'btn-outline'}`} onClick={() => setCategoria(cat)}>{cat}</button>
+        ))}
       </div>
-      <button className="btn btn-primary" onClick={() => setMostrarForm(!mostrarForm)} style={{ marginBottom: 12 }}>{mostrarForm ? 'Cancelar' : 'Añadir producto'}</button>
+
+      <button className="btn btn-primary" onClick={() => setMostrarForm(!mostrarForm)} style={{ marginBottom: 16 }}>
+        <Plus size={16} /> {mostrarForm ? 'Cancelar' : 'Añadir producto'}
+      </button>
+
       {mostrarForm && (
-        <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-          <input className="input-search" placeholder="Nombre" value={nombre} onChange={e => setNombre(e.target.value)} style={{ flex: '1 1 150px' }} />
-          <input className="input-search" placeholder="Precio" type="number" value={precio} onChange={e => setPrecio(e.target.value)} style={{ flex: '1 1 100px' }} />
-          <input className="input-search" placeholder="Categoría nueva" value={nuevaCategoria} onChange={e => setNuevaCategoria(e.target.value)} style={{ flex: '1 1 150px' }} />
-          <button className="btn btn-primary" onClick={() => {
-              const categoriaFinal = nuevaCategoria.trim() || categoria;
-              if (!categoriaFinal || !nombre.trim() || !precio) return alert('Datos inválidos');
-              onAdd(categoriaFinal, nombre.trim(), precio);
-              setNombre(''); setPrecio(''); setNuevaCategoria(''); setMostrarForm(false);
-            }}>Guardar</button>
-        </div>
-      )}
-      <div style={{ overflowY: 'auto', maxHeight: '60vh' }}>
-        {itemsFiltrados.map(item => (
-          <div key={item.docId} style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #ddd', padding: 8 }}>
-            <div><strong>{item.name}</strong><div style={{ fontSize: 12 }}>{item.category} · {formatColones(item.price)}</div></div>
-            <div style={{ display: 'flex', gap: 6 }}>
-              <button className="btn btn-outline" onClick={async () => {
-                  try {
-                    const nuevoNombre = prompt('Nombre', item.name); if (nuevoNombre === null) return; 
-                    const nuevoPrecioRaw = prompt('Precio', item.price); if (nuevoPrecioRaw === null) return;
-                    await onUpdate(item.docId, { name: nuevoNombre.trim(), price: Number(nuevoPrecioRaw), category: item.category });
-                  } catch (err) { alert('Error: ' + err.message); }
-                }}>Editar</button>
-              <button className="btn btn-danger" onClick={() => onDelete(item.docId)}>X</button>
+        <div className="card" style={{ padding: '1rem', marginBottom: '1.25rem', background: '#f8fafc' }}>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+            <input className="input-search" placeholder="Nombre del producto" value={nombre} onChange={e => setNombre(e.target.value)} style={{ flex: '1 1 180px' }} />
+            <input className="input-search" placeholder="Precio (₡)" type="number" value={precio} onChange={e => setPrecio(e.target.value)} style={{ flex: '1 1 100px' }} />
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+            <select className="input-search" value={categoria || ''} onChange={e => setCategoria(e.target.value)} style={{ flex: '1 1 150px' }}>
+              <option value="">Elegir categoría existente...</option>
+              {categorias.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <input className="input-search" placeholder="...o escribe una categoría nueva" value={nuevaCategoria} onChange={e => setNuevaCategoria(e.target.value)} style={{ flex: '1 1 180px' }} />
+          </div>
+
+          {/* ESTACIÓN: define a qué pantalla (Cocina o Barra) llega la comanda de este producto */}
+          <div style={{ marginBottom: 10 }}>
+            <div className="text-muted" style={{ fontSize: '0.8rem', marginBottom: 4 }}>¿A qué estación llega la comanda?</div>
+            <div className="payment-selector" style={{ marginBottom: 0, maxWidth: 320 }}>
+              <button type="button" className={`payment-btn ${nuevaEstacion === 'cocina' ? 'active' : ''}`} onClick={() => setNuevaEstacion('cocina')}>🍳 Cocina</button>
+              <button type="button" className={`payment-btn ${nuevaEstacion === 'bartender' ? 'active' : ''}`} onClick={() => setNuevaEstacion('bartender')}>🍹 Barra</button>
             </div>
           </div>
-        ))}
+
+          <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }} onClick={() => {
+              const categoriaFinal = nuevaCategoria.trim() || categoria;
+              if (!categoriaFinal || !nombre.trim() || !precio) return alert('Completa nombre, precio y categoría');
+              onAdd(categoriaFinal, nombre.trim(), precio, nuevaEstacion);
+              setNombre(''); setPrecio(''); setNuevaCategoria(''); setMostrarForm(false); setNuevaEstacion('cocina');
+            }}>Guardar producto</button>
+        </div>
+      )}
+
+      <div style={{ display: 'grid', gap: '8px' }}>
+        {itemsFiltrados.length === 0 && <div className="text-muted" style={{ textAlign: 'center', padding: '2rem' }}>No hay productos en esta categoría.</div>}
+        {itemsFiltrados.map(item => {
+          const estacion = getMenuItemStation(item);
+          return (
+            <div key={item.docId} className="card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem 1rem' }}>
+              <div>
+                <strong>{item.name}</strong>
+                <div className="text-muted" style={{ fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
+                  {item.category} · {formatColones(item.price)}
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                {/* Toggle de estación con un clic, sin necesidad de abrir un formulario */}
+                <button
+                  className="btn btn-outline"
+                  title="Click para cambiar de estación"
+                  style={estacion === 'bartender' ? { color: '#7c3aed', borderColor: '#c4b5fd', background: '#f5f3ff' } : { color: '#d97706', borderColor: '#fde68a', background: '#fffbeb' }}
+                  onClick={() => onUpdate(item.docId, { station: estacion === 'bartender' ? 'cocina' : 'bartender' })}
+                >
+                  {estacion === 'bartender' ? '🍹 Barra' : '🍳 Cocina'}
+                </button>
+                <button className="btn btn-outline" onClick={async () => {
+                    try {
+                      const nuevoNombre = prompt('Nombre', item.name); if (nuevoNombre === null) return; 
+                      const nuevoPrecioRaw = prompt('Precio', item.price); if (nuevoPrecioRaw === null) return;
+                      await onUpdate(item.docId, { name: nuevoNombre.trim(), price: Number(nuevoPrecioRaw), category: item.category });
+                    } catch (err) { alert('Error: ' + err.message); }
+                  }}><Edit size={14} /></button>
+                <button className="btn btn-danger" onClick={() => onDelete(item.docId)}><Trash2 size={14} /></button>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -1156,7 +1313,7 @@ function MenuManager({ menu, onAdd, onUpdate, onDelete, onBack }) {
 
 function NavBtn({ icon, label, active, onClick }) {
   return (
-    <button onClick={onClick} style={{ display: 'flex', gap: '0.5rem', padding: '0.5rem 1rem', borderRadius: '8px', background: active ? 'var(--accent)' : 'transparent', color: active ? 'var(--primary)' : 'var(--text-muted)', border: 'none', cursor: 'pointer', fontWeight: '600', alignItems: 'center' }}>
+    <button className={`nav-btn ${active ? 'nav-btn-active' : ''}`} onClick={onClick} style={{ display: 'flex', gap: '0.5rem', padding: '0.5rem 1rem', borderRadius: '8px', background: active ? 'var(--accent)' : 'transparent', color: active ? 'var(--primary)' : 'var(--text-muted)', border: 'none', cursor: 'pointer', fontWeight: '600', alignItems: 'center' }}>
       {icon} {label}
     </button>
   );
