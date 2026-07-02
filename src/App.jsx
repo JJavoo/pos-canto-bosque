@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   Utensils, Coffee, Archive, ChevronLeft, Trash2, ArrowLeft, Plus, Minus, 
   Search, XCircle, Tent, Edit, Users, FileText, CheckCircle, Save, Printer, 
-  BarChart3, Banknote, ChefHat, Check, ClipboardList
+  BarChart3, Banknote, ChefHat, Check, ClipboardList, Wine
 } from 'lucide-react';
 
 import { db } from './firebase';
@@ -21,6 +21,12 @@ const CATEGORY_ICONS = {
   Cócteles: '🍹', Licores: '🥃', Cervezas: '🍺', Vinos: '🍷',
   'Bebidas Naturales': '🥤', Refrescos: '🧊', Especial: '✨',
 };
+
+// Categorías que le pertenecen al Bartender (tragos, bebidas, cócteles, postres).
+// Todo lo que NO esté en esta lista (comida y frescos naturales) va a la Cocina por defecto,
+// incluyendo cualquier categoría nueva que se cree a futuro en el Menú.
+const BARTENDER_CATEGORIES = ['Cócteles', 'Licores', 'Cervezas', 'Vinos', 'Refrescos', 'Postres'];
+const getStation = (category) => BARTENDER_CATEGORIES.includes(category) ? 'bartender' : 'cocina';
 
 const formatColones = (val) => {
   const n = Number(val) || 0;
@@ -265,6 +271,7 @@ export default function App() {
             <NavBtn icon={<Banknote size={18} />} label="Caja" active={view === 'caja' || view === 'pos_caja'} onClick={() => setView('caja')} />
             <span style={{ width: '1px', height: '20px', background: 'var(--border)', margin: '0 5px' }}></span>
             <NavBtn icon={<ChefHat size={18} />} label="Cocina" active={view === 'kitchen'} onClick={() => setView('kitchen')} />
+            <NavBtn icon={<Wine size={18} />} label="Barra" active={view === 'bartender'} onClick={() => setView('bartender')} />
             <NavBtn icon={<Tent size={18} />} label="Cabañas" active={view === 'cabanas'} onClick={() => setView('cabanas')} />
             <NavBtn icon={<Archive size={18} />} label="Historial" active={view === 'history'} onClick={() => setView('history')} />
             <NavBtn icon={<BarChart3 size={18} />} label="Reportes" active={view === 'reports'} onClick={() => setView('reports')} />
@@ -287,7 +294,16 @@ export default function App() {
             <POSInterface role="caja" table={activeTable} menu={menu} cabanas={cabanas} onUpdateTable={handleUpdateTable} onCloseOrder={handleCloseOrder} onPartialAmount={handlePartialAmountPayment} onBack={() => setView('caja')} />
           )}
 
-          {view === 'kitchen' && <KitchenManager tables={tables} onUpdateTable={handleUpdateTable} />}
+          {view === 'kitchen' && (
+            <KitchenManager tables={tables} onUpdateTable={handleUpdateTable} station="cocina"
+              title="Comandas de Cocina" icon={<ChefHat size={20} />}
+              emptyTitle="No hay pedidos en cola" emptyText="La cocina está libre por el momento." emptyIcon={<ChefHat size={48} color="#cbd5e1" style={{ marginBottom: '1rem' }} />} />
+          )}
+          {view === 'bartender' && (
+            <KitchenManager tables={tables} onUpdateTable={handleUpdateTable} station="bartender"
+              title="Comandas de Barra" icon={<Wine size={20} />}
+              emptyTitle="No hay pedidos en cola" emptyText="La barra está libre por el momento." emptyIcon={<Wine size={48} color="#cbd5e1" style={{ marginBottom: '1rem' }} />} />
+          )}
           {view === 'cabanas' && <CabinsManager cabanas={cabanas} onUpdate={handleUpdateCabana} onCheckout={handleCheckoutCabana} onPrint={handlePrint} />}
           {view === 'history' && <HistoryManager history={history} onPrint={handlePrint} />}
           {view === 'reports' && <ReportsManager />}
@@ -389,9 +405,9 @@ function TablesManager({ tables, title, onCreate, onOpen, onDelete, onRename }) 
   );
 }
 
-function KitchenManager({ tables, onUpdateTable }) {
-  // Versión limpia sin audio
-  const comandasActivas = tables.filter(t => t.items && t.items.some(i => i.estadoCocina === 'Pendiente'));
+function KitchenManager({ tables, onUpdateTable, station, title, icon, emptyTitle, emptyText, emptyIcon }) {
+  // Solo consideramos los items pendientes que le pertenecen a ESTA estación
+  const comandasActivas = tables.filter(t => t.items && t.items.some(i => i.estadoCocina === 'Pendiente' && getStation(i.category) === station));
 
   const marcarItemListo = (table, instanceId) => {
     const newItems = table.items.map(i => i.instanceId === instanceId ? { ...i, estadoCocina: 'Listo' } : i);
@@ -399,16 +415,18 @@ function KitchenManager({ tables, onUpdateTable }) {
   };
 
   const marcarTodoListo = (table) => {
-    const newItems = table.items.map(i => i.estadoCocina === 'Pendiente' ? { ...i, estadoCocina: 'Listo' } : i);
+    // Importante: solo marcamos "Listo" los items de ESTA estación, para no completar
+    // por accidente pedidos pendientes de la otra estación (ej: cocina no debe cerrar tragos de barra)
+    const newItems = table.items.map(i => (i.estadoCocina === 'Pendiente' && getStation(i.category) === station) ? { ...i, estadoCocina: 'Listo' } : i);
     onUpdateTable({ ...table, items: newItems });
   };
 
   if (comandasActivas.length === 0) {
     return (
       <div className="card" style={{ padding: '3rem', textAlign: 'center', height: '100%', background: '#f8fafc' }}>
-        <ChefHat size={48} color="#cbd5e1" style={{ marginBottom: '1rem' }} />
-        <h2 style={{ color: '#64748b' }}>No hay pedidos en cola</h2>
-        <p className="text-muted">La cocina está libre por el momento.</p>
+        {emptyIcon}
+        <h2 style={{ color: '#64748b' }}>{emptyTitle}</h2>
+        <p className="text-muted">{emptyText}</p>
       </div>
     );
   }
@@ -416,11 +434,11 @@ function KitchenManager({ tables, onUpdateTable }) {
   return (
     <div className="card" style={{ padding: '1.5rem', height: '100%', overflowY: 'auto', background: '#f8fafc' }}>
       <h2 style={{ fontSize: '1.2rem', fontWeight: '800', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
-        <ChefHat size={20} /> Comandas en Preparación
+        {icon} {title}
       </h2>
       <div className="category-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))' }}>
         {comandasActivas.map(table => {
-          const itemsPendientesRaw = table.items.filter(i => i.estadoCocina === 'Pendiente');
+          const itemsPendientesRaw = table.items.filter(i => i.estadoCocina === 'Pendiente' && getStation(i.category) === station);
           // Agrupamos por producto+nota para que la cocina vea "3x Casado" en vez de
           // tres tarjetas separadas de "1x Casado" (una por cada unidad individual).
           const gruposPendientes = {};
@@ -718,7 +736,7 @@ function POSInterface({ role, table, menu, cabanas, onUpdateTable, onCloseOrder,
              {/* ENVIAR A COCINA (Visible si hay algo nuevo) */}
              {hasNewItems && (
                <button className="btn" style={{ width: '100%', justifyContent: 'center', padding: '12px', background: '#fffbeb', border: '1px solid #f59e0b', color: '#d97706' }} onClick={handleSendToKitchen}>
-                 <ChefHat size={18} /> ENVIAR A COCINA
+                 <ChefHat size={18} /> ENVIAR COMANDA
                </button>
              )}
              
