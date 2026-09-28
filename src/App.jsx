@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 
 import { db } from './firebase';
+import { useNegocio } from './core/negocio.jsx';
 import {
   collection, onSnapshot, addDoc, updateDoc, doc, query, orderBy, where,
   serverTimestamp, runTransaction, getDoc, setDoc, deleteDoc
@@ -58,25 +59,26 @@ export default function App() {
   const [selectedTableId, setSelectedTableId] = useState(null);
   
   const [ticketData, setTicketData] = useState(null);
+  const { col } = useNegocio();
 
   useEffect(() => {
-    const unsubMenu = onSnapshot(query(collection(db, 'menu'), orderBy('createdAt', 'asc')), (snap) => {
+    const unsubMenu = onSnapshot(query(col('productos'), orderBy('createdAt', 'asc')), (snap) => {
         const docs = snap.docs.map(d => ({ docId: d.id, ...d.data() }));
         setMenu(docs);
       });
 
-    const unsubMesas = onSnapshot(query(collection(db, 'mesas'), orderBy('createdAt', 'asc')), (snap) => {
+    const unsubMesas = onSnapshot(query(col('mesas'), orderBy('createdAt', 'asc')), (snap) => {
       setTables(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
     });
 
-    const unsubVentas = onSnapshot(query(collection(db, 'ventas'), orderBy('fecha_hora', 'desc')), (snap) => {
+    const unsubVentas = onSnapshot(query(col('ventas'), orderBy('fecha_hora', 'desc')), (snap) => {
        setHistory(snap.docs.slice(0, 50).map(d => ({id: d.id, ...d.data()})));
     });
 
     const initCabanas = async () => {
       for(let i=1; i<=7; i++) {
         const cabId = `cabana-${i}`;
-        const docRef = doc(db, 'cabanas', cabId);
+        const docRef = doc(col('cabanas'), cabId);
         const docSnap = await getDoc(docRef);
         if(!docSnap.exists()) {
           await setDoc(docRef, { id: i, name: `Cabaña ${i}`, status: 'Libre', info: {} });
@@ -85,7 +87,7 @@ export default function App() {
     };
     initCabanas();
 
-    const unsubCabanas = onSnapshot(query(collection(db, 'cabanas'), orderBy('id', 'asc')), (snap) => {
+    const unsubCabanas = onSnapshot(query(col('cabanas'), orderBy('id', 'asc')), (snap) => {
       setCabanas(snap.docs.map(d => ({ docId: d.id, ...d.data() })));
     });
 
@@ -108,30 +110,30 @@ export default function App() {
   // --- CRUD MENU ---
   const addMenuItem = async (category, name, price, station = 'cocina') => {
     try {
-      const ref = await addDoc(collection(db, 'menu'), { name, category, price: Number(price), station, createdAt: serverTimestamp() });
-      await setDoc(doc(db, 'menu', ref.id), { id: ref.id }, { merge: true });
+      const ref = await addDoc(col('productos'), { name, category, price: Number(price), station, tipo: 'producto', activo: true, cabys: null, tarifaIva: null, createdAt: serverTimestamp() });
+      await setDoc(doc(col('productos'), ref.id), { id: ref.id }, { merge: true });
       alert('Producto agregado');
     } catch (e) { alert('Error: ' + e.message); }
   };
   const updateMenuItem = async (docId, data) => {
     try {
-      await setDoc(doc(db, 'menu', docId), { ...data, updatedAt: serverTimestamp() }, { merge: true });
+      await setDoc(doc(col('productos'), docId), { ...data, updatedAt: serverTimestamp() }, { merge: true });
       alert('Producto actualizado');
     } catch (e) { alert('Error: ' + e.message); }
   };
   const deleteMenuItem = async (docId) => {
     if (!window.confirm('¿Eliminar producto?')) return;
-    try { await deleteDoc(doc(db, 'menu', docId)); alert('Producto eliminado'); } catch (e) { alert('Error: ' + e.message); }
+    try { await deleteDoc(doc(col('productos'), docId)); alert('Producto eliminado'); } catch (e) { alert('Error: ' + e.message); }
   };
 
   // --- HANDLERS MESAS ---
   const handleCreateTable = async (name) => {
     if (!name) return;
-    await addDoc(collection(db, 'mesas'), { name, status: 'free', items: [], payment: 'Efectivo', createdAt: serverTimestamp() });
+    await addDoc(col('mesas'), { name, status: 'free', items: [], payment: 'Efectivo', createdAt: serverTimestamp() });
   };
   const handleUpdateTable = async (updated) => {
     if (!updated.id) return;
-    const ref = doc(db, 'mesas', updated.id);
+    const ref = doc(col('mesas'), updated.id);
     await updateDoc(ref, {
       items: updated.items,
       status: (updated.items && updated.items.length > 0) ? 'occupied' : 'free',
@@ -141,18 +143,18 @@ export default function App() {
   };
   const handleRenameTable = async (tableId, currentName) => {
     const newName = prompt("Nuevo nombre para la mesa:", currentName);
-    if(newName && newName !== currentName) await updateDoc(doc(db, 'mesas', tableId), { name: newName });
+    if(newName && newName !== currentName) await updateDoc(doc(col('mesas'), tableId), { name: newName });
   };
   const handleDeleteTable = async (table) => {
     if ((table.items || []).length > 0) return alert('La mesa tiene pedidos activos.');
     if (!window.confirm(`¿Eliminar ${table.name}?`)) return;
-    await deleteDoc(doc(db, 'mesas', table.id));
+    await deleteDoc(doc(col('mesas'), table.id));
   };
 
   // --- COBRO ---
   const handleCloseOrder = async (tableData, itemsToPay = null, paymentMethod = 'Efectivo') => {
-    const tableRef = doc(db, 'mesas', tableData.id);
-    const ventasColl = collection(db, 'ventas');
+    const tableRef = doc(col('mesas'), tableData.id);
+    const ventasColl = col('ventas');
     const isPartial = itemsToPay !== null;
     const finalItems = isPartial ? itemsToPay : (tableData.items || []);
     
@@ -190,7 +192,7 @@ export default function App() {
         transaction.set(newVentaRef, ventaData);
 
         finalItems.forEach(item => {
-            if (item.linkedCabinId) transaction.update(doc(db, 'cabanas', item.linkedCabinId), { 'info.estadoPago': 'Pagado' });
+            if (item.linkedCabinId) transaction.update(doc(col('cabanas'), item.linkedCabinId), { 'info.estadoPago': 'Pagado' });
         });
 
         if (isPartial) {
@@ -209,8 +211,8 @@ export default function App() {
   };
 
   const handlePartialAmountPayment = async (tableData, monto, paymentMethod) => {
-    const tableRef = doc(db, 'mesas', tableData.id);
-    const ventasColl = collection(db, 'ventas');
+    const tableRef = doc(col('mesas'), tableData.id);
+    const ventasColl = col('ventas');
     const montoNum = Number(monto);
     if (!montoNum || montoNum <= 0) return alert('Monto inválido');
 
@@ -256,7 +258,7 @@ export default function App() {
     } catch (e) { alert('Error: ' + e.message); }
   };
   
-  const handleUpdateCabana = async (docId, newData) => await updateDoc(doc(db, 'cabanas', docId), newData);
+  const handleUpdateCabana = async (docId, newData) => await updateDoc(doc(col('cabanas'), docId), newData);
   const handleCheckoutCabana = async (cabana) => {
     const estaPagado = cabana.info?.estadoPago === 'Pagado';
     if (!estaPagado) {
@@ -269,7 +271,7 @@ export default function App() {
     } else {
       if (!window.confirm(`¿Finalizar alquiler de ${cabana.name}?`)) return;
     }
-    await updateDoc(doc(db, 'cabanas', cabana.docId), { status: 'Libre', info: {} });
+    await updateDoc(doc(col('cabanas'), cabana.docId), { status: 'Libre', info: {} });
   };
 
   return (
@@ -871,7 +873,7 @@ function CabinsManager({ cabanas, onUpdate, onCheckout, onPrint }) {
       createdAt: serverTimestamp(), tipo: 'Hospedaje'
     };
 
-    await addDoc(collection(db, 'ventas'), ventaData);
+    await addDoc(col('ventas'), ventaData);
     await onUpdate(payingCabin.docId, { 'info.estadoPago': 'Pagado' });
     onPrint({ ...ventaData, fecha_hora: new Date(), id: 'NUEVA' });
     setPayingCabin(null); alert("Cobro registrado exitosamente.");
@@ -1133,6 +1135,7 @@ function ReportsManager() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [rankBy, setRankBy] = useState('monto');
+  const { col } = useNegocio();
 
   useEffect(() => {
     setLoading(true); setError(null);
@@ -1140,7 +1143,7 @@ function ReportsManager() {
     const start = new Date(year, month - 1, 1);
     const end = new Date(year, month, 1); 
 
-    const q = query(collection(db, 'ventas'), where('fecha_hora', '>=', start), where('fecha_hora', '<', end), orderBy('fecha_hora', 'asc'));
+    const q = query(col('ventas'), where('fecha_hora', '>=', start), where('fecha_hora', '<', end), orderBy('fecha_hora', 'asc'));
 
     const unsub = onSnapshot(q,
       (snap) => { setVentasMes(snap.docs.map(d => ({ id: d.id, ...d.data() }))); setLoading(false); },
