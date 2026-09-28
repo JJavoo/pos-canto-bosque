@@ -1,7 +1,7 @@
 // firebase.js
 import { initializeApp } from 'firebase/app';
 import { getFirestore } from 'firebase/firestore';
-import { getAuth, signInAnonymously } from 'firebase/auth';
+import { getAuth } from 'firebase/auth';
 import { getStorage } from 'firebase/storage';
 
 // Tu configuración (la que ya tienes)
@@ -19,10 +19,5 @@ const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const auth = getAuth(app);
 const storage = getStorage(app);
-
-// Iniciar sesión anónimo para identificar dispositivos (útil para auditoría)
-signInAnonymously(auth).catch((err) => {
-  console.warn('No se pudo iniciar sesión anónimo:', err.message);
-});
 
 export { app, db, auth, storage };
